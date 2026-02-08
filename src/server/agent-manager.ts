@@ -1,0 +1,450 @@
+import {
+  createAgentSession,
+  SessionManager,
+  ModelRegistry,
+  AuthStorage,
+  type AgentSession,
+  type AgentSessionEvent,
+  type SessionInfo as PiSessionInfo,
+} from "@mariozechner/pi-coding-agent";
+import { getModel } from "@mariozechner/pi-ai";
+import { join } from "path";
+import { homedir } from "os";
+import type {
+  SessionInfo,
+  ModelInfo,
+  ThinkingLevel,
+  SerializedMessage,
+  StreamDelta,
+  Attachment,
+} from "../shared/protocol.js";
+
+type EventHandler = (sessionId: string, delta: StreamDelta) => void;
+type SessionStateHandler = (
+  sessionId: string,
+  isStreaming: boolean,
+  title?: string,
+) => void;
+
+interface ManagedSession {
+  session: AgentSession;
+  unsubscribe: () => void;
+  title: string;
+  createdAt: number;
+}
+
+export class AgentManager {
+  private sessions = new Map<string, ManagedSession>();
+  private cwd: string;
+  private onStreamDelta: EventHandler;
+  private onSessionStateChange: SessionStateHandler;
+  private modelRegistry: ModelRegistry;
+
+  constructor(
+    cwd: string,
+    onStreamDelta: EventHandler,
+    onSessionStateChange: SessionStateHandler,
+  ) {
+    this.cwd = cwd;
+    this.onStreamDelta = onStreamDelta;
+    this.onSessionStateChange = onSessionStateChange;
+    const agentDir = join(homedir(), ".pi", "agent");
+    const authStorage = new AuthStorage(join(agentDir, "auth.json"));
+    this.modelRegistry = new ModelRegistry(authStorage, join(agentDir, "models.json"));
+  }
+
+  async createSession(): Promise<{
+    info: SessionInfo;
+    model: ModelInfo | null;
+    thinkingLevel: ThinkingLevel;
+    availableThinkingLevels: ThinkingLevel[];
+  }> {
+    const { session } = await createAgentSession({
+      cwd: this.cwd,
+      model: getModel("openrouter", "anthropic/claude-opus-4.6" as any),
+    });
+
+    const sessionId = session.sessionId;
+    const unsub = this.subscribeToSession(sessionId, session);
+
+    const managed: ManagedSession = {
+      session,
+      unsubscribe: unsub,
+      title: "New conversation",
+      createdAt: Date.now(),
+    };
+
+    this.sessions.set(sessionId, managed);
+
+    return {
+      info: this.toSessionInfo(sessionId, managed),
+      model: this.getModelInfo(session),
+      thinkingLevel: session.thinkingLevel as ThinkingLevel,
+      availableThinkingLevels:
+        session.getAvailableThinkingLevels() as ThinkingLevel[],
+    };
+  }
+
+  async loadSession(
+    piSessionInfo: PiSessionInfo,
+  ): Promise<{
+    info: SessionInfo;
+    messages: SerializedMessage[];
+    model: ModelInfo | null;
+    thinkingLevel: ThinkingLevel;
+    availableThinkingLevels: ThinkingLevel[];
+  }> {
+    // Check if already loaded
+    const existing = this.sessions.get(piSessionInfo.id);
+    if (existing) {
+      return {
+        info: this.toSessionInfo(piSessionInfo.id, existing),
+        messages: this.serializeMessages(existing.session),
+        model: this.getModelInfo(existing.session),
+        thinkingLevel: existing.session.thinkingLevel as ThinkingLevel,
+        availableThinkingLevels:
+          existing.session.getAvailableThinkingLevels() as ThinkingLevel[],
+      };
+    }
+
+    const { session } = await createAgentSession({
+      cwd: this.cwd,
+      sessionManager: SessionManager.open(piSessionInfo.path),
+    });
+
+    const sessionId = session.sessionId;
+    const unsub = this.subscribeToSession(sessionId, session);
+
+    const managed: ManagedSession = {
+      session,
+      unsubscribe: unsub,
+      title: piSessionInfo.firstMessage || "Conversation",
+      createdAt: piSessionInfo.created.getTime(),
+    };
+
+    this.sessions.set(sessionId, managed);
+
+    return {
+      info: this.toSessionInfo(sessionId, managed),
+      messages: this.serializeMessages(session),
+      model: this.getModelInfo(session),
+      thinkingLevel: session.thinkingLevel as ThinkingLevel,
+      availableThinkingLevels:
+        session.getAvailableThinkingLevels() as ThinkingLevel[],
+    };
+  }
+
+  async unloadSession(sessionId: string): Promise<void> {
+    const managed = this.sessions.get(sessionId);
+    if (!managed) return;
+
+    if (managed.session.isStreaming) {
+      await managed.session.abort();
+    }
+    managed.unsubscribe();
+    managed.session.dispose();
+    this.sessions.delete(sessionId);
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    // Unload first if loaded
+    await this.unloadSession(sessionId);
+
+    // Find the session file path from listing
+    const piSessions = await SessionManager.list(this.cwd);
+    const session = piSessions.find((s) => s.id === sessionId);
+    if (session) {
+      const { unlink } = await import("fs/promises");
+      await unlink(session.path);
+    }
+  }
+
+  async listSessions(): Promise<SessionInfo[]> {
+    const piSessions = await SessionManager.list(this.cwd);
+    return piSessions.map((s) => {
+      const loaded = this.sessions.get(s.id);
+      return {
+        id: s.id,
+        path: s.path,
+        title:
+          loaded?.title || s.firstMessage || "Empty conversation",
+        createdAt: s.created.getTime(),
+        modifiedAt: s.modified.getTime(),
+        messageCount: s.messageCount,
+        isLoaded: !!loaded,
+        isStreaming: loaded?.session.isStreaming ?? false,
+      };
+    });
+  }
+
+  async prompt(
+    sessionId: string,
+    text: string,
+    attachments?: Attachment[],
+  ): Promise<void> {
+    const managed = this.sessions.get(sessionId);
+    if (!managed) throw new Error(`Session ${sessionId} not found`);
+
+    // Update title from first user message
+    if (managed.title === "New conversation") {
+      managed.title = text.slice(0, 100);
+    }
+
+    // Convert attachments to pi SDK ImageContent
+    const images = attachments
+      ?.filter((a) => a.type === "image")
+      .map((a) => ({
+        type: "image" as const,
+        data: a.data,
+        mimeType: a.mimeType,
+      }));
+
+    const opts = {
+      ...(images?.length ? { images } : {}),
+      ...(managed.session.isStreaming
+        ? { streamingBehavior: "followUp" as const }
+        : {}),
+    };
+
+    await managed.session.prompt(text, opts);
+  }
+
+  async abort(sessionId: string): Promise<void> {
+    const managed = this.sessions.get(sessionId);
+    if (!managed) return;
+    await managed.session.abort();
+  }
+
+  async setModel(
+    sessionId: string,
+    provider: string,
+    modelId: string,
+  ): Promise<{
+    model: ModelInfo;
+    thinkingLevel: ThinkingLevel;
+    availableThinkingLevels: ThinkingLevel[];
+  }> {
+    const managed = this.sessions.get(sessionId);
+    if (!managed) throw new Error(`Session ${sessionId} not found`);
+
+    const model = getModel(provider as any, modelId as any);
+    await managed.session.setModel(model);
+
+    return {
+      model: this.getModelInfo(managed.session)!,
+      thinkingLevel: managed.session.thinkingLevel as ThinkingLevel,
+      availableThinkingLevels:
+        managed.session.getAvailableThinkingLevels() as ThinkingLevel[],
+    };
+  }
+
+  setThinkingLevel(sessionId: string, level: ThinkingLevel): void {
+    const managed = this.sessions.get(sessionId);
+    if (!managed) throw new Error(`Session ${sessionId} not found`);
+    managed.session.setThinkingLevel(level);
+  }
+
+  getAvailableModels(): ModelInfo[] {
+    return this.modelRegistry.getAvailable().map((model) => ({
+      provider: model.provider,
+      id: model.id,
+      name: model.name,
+      reasoning: model.reasoning,
+    }));
+  }
+
+  getSession(sessionId: string): AgentSession | undefined {
+    return this.sessions.get(sessionId)?.session;
+  }
+
+  async dispose(): Promise<void> {
+    for (const [id] of this.sessions) {
+      await this.unloadSession(id);
+    }
+  }
+
+  // -- Private --
+
+  private subscribeToSession(
+    sessionId: string,
+    session: AgentSession,
+  ): () => void {
+    return session.subscribe((event: AgentSessionEvent) => {
+      const delta = this.eventToDelta(event);
+      if (delta) {
+        this.onStreamDelta(sessionId, delta);
+      }
+
+      if (event.type === "agent_start") {
+        const managed = this.sessions.get(sessionId);
+        this.onSessionStateChange(sessionId, true, managed?.title);
+      } else if (event.type === "agent_end") {
+        const managed = this.sessions.get(sessionId);
+        this.onSessionStateChange(sessionId, false, managed?.title);
+      }
+    });
+  }
+
+  private eventToDelta(event: AgentSessionEvent): StreamDelta | null {
+    switch (event.type) {
+      case "agent_start":
+        return { type: "agent_start" };
+      case "agent_end":
+        return { type: "agent_end" };
+      case "turn_start":
+        return { type: "turn_start" };
+      case "turn_end":
+        return { type: "turn_end" };
+
+      case "message_start":
+        return { type: "message_start", role: event.message.role };
+
+      case "message_end": {
+        const msg = event.message;
+        if (
+          msg.role === "user" ||
+          msg.role === "assistant" ||
+          msg.role === "toolResult"
+        ) {
+          return {
+            type: "message_end",
+            message: this.serializeMessage(msg) as SerializedMessage,
+          };
+        }
+        return null;
+      }
+
+      case "message_update": {
+        const ame = event.assistantMessageEvent;
+        switch (ame.type) {
+          case "text_delta":
+            return { type: "text_delta", delta: ame.delta };
+          case "thinking_delta":
+            return { type: "thinking_delta", delta: ame.delta };
+          case "toolcall_start":
+            return {
+              type: "toolcall_start",
+              contentIndex: ame.contentIndex,
+            };
+          case "toolcall_end":
+            return {
+              type: "toolcall_end",
+              toolCallId: ame.toolCall.id,
+              toolName: ame.toolCall.name,
+              args: ame.toolCall.arguments,
+            };
+          default:
+            return null;
+        }
+      }
+
+      case "tool_execution_start":
+        return {
+          type: "tool_exec_start",
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          args: event.args,
+        };
+
+      case "tool_execution_end": {
+        const details =
+          event.result &&
+          typeof event.result === "object" &&
+          "details" in event.result &&
+          event.result.details
+            ? (event.result.details as Record<string, unknown>)
+            : undefined;
+        return {
+          type: "tool_exec_end",
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          result: {
+            role: "toolResult",
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            content:
+              typeof event.result === "string"
+                ? [{ type: "text", text: event.result }]
+                : Array.isArray(event.result?.content)
+                  ? event.result.content
+                  : [
+                      {
+                        type: "text" as const,
+                        text: JSON.stringify(event.result),
+                      },
+                    ],
+            isError: event.isError,
+            timestamp: Date.now(),
+            details,
+          },
+          isError: event.isError,
+        };
+      }
+
+      default:
+        return null;
+    }
+  }
+
+  private serializeMessages(session: AgentSession): SerializedMessage[] {
+    return session.messages
+      .map((msg) => this.serializeMessage(msg))
+      .filter((m): m is SerializedMessage => m !== null);
+  }
+
+  private serializeMessage(msg: any): SerializedMessage | null {
+    switch (msg.role) {
+      case "user":
+        return {
+          role: "user",
+          content: msg.content,
+          timestamp: msg.timestamp,
+        };
+      case "assistant":
+        return {
+          role: "assistant",
+          content: msg.content,
+          model: msg.model || "",
+          provider: msg.provider || "",
+          stopReason: msg.stopReason,
+          timestamp: msg.timestamp,
+        };
+      case "toolResult":
+        return {
+          role: "toolResult",
+          toolCallId: msg.toolCallId,
+          toolName: msg.toolName,
+          content: msg.content,
+          isError: msg.isError,
+          timestamp: msg.timestamp,
+          details: msg.details,
+        };
+      default:
+        return null;
+    }
+  }
+
+  private getModelInfo(session: AgentSession): ModelInfo | null {
+    const model = session.model;
+    if (!model) return null;
+    return {
+      provider: model.provider,
+      id: model.id,
+      name: model.name,
+      reasoning: model.reasoning,
+    };
+  }
+
+  private toSessionInfo(id: string, managed: ManagedSession): SessionInfo {
+    return {
+      id,
+      path: managed.session.sessionFile || "",
+      title: managed.title,
+      createdAt: managed.createdAt,
+      modifiedAt: Date.now(),
+      messageCount: managed.session.messages.length,
+      isLoaded: true,
+      isStreaming: managed.session.isStreaming,
+    };
+  }
+}
