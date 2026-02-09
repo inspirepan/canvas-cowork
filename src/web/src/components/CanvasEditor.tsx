@@ -110,6 +110,26 @@ export function CanvasEditor({ onMount }: CanvasEditorProps) {
               !editor.getIsReadonly()
             ) {
               const { x, y } = editor.inputs.currentPagePoint;
+
+              // Check if click is near an existing named_text (e.g. on the name
+              // label above the shape bounds). If so, edit it instead of creating.
+              const existing = editor.getCurrentPageShapes().find((s) => {
+                if (s.type !== "named_text") return false;
+                const bounds = editor.getShapePageBounds(s);
+                if (!bounds) return false;
+                return (
+                  x >= bounds.x - 4 &&
+                  x <= bounds.maxX + 4 &&
+                  y >= bounds.y - 28 &&
+                  y <= bounds.maxY + 4
+                );
+              });
+              if (existing) {
+                editor.select(existing.id);
+                editor.setEditingShape(existing.id);
+                return;
+              }
+
               const id = createShapeId();
               editor.createShape({
                 id,

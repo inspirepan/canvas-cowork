@@ -176,10 +176,15 @@ export function App() {
         )}
       </button>
 
-      {/* AgentPanel sidebar */}
+      {/* AgentPanel sidebar - stop keyboard/clipboard events from reaching tldraw */}
       <div
         className="h-full shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out"
         style={{ width: panelOpen ? PANEL_WIDTH : 0 }}
+        onKeyDown={(e) => e.stopPropagation()}
+        onKeyUp={(e) => e.stopPropagation()}
+        onCopy={(e) => e.stopPropagation()}
+        onCut={(e) => e.stopPropagation()}
+        onPaste={(e) => e.stopPropagation()}
       >
         <div className="h-full bg-background border-l border-border" style={{ width: PANEL_WIDTH }}>
           <AgentPanel agent={agent} canvasContext={canvasContext} />
