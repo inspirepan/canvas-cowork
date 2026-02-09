@@ -41,18 +41,14 @@ interface ManagedSession {
 // Threshold for auto-saving long messages/prompts to files
 const PROMPT_FILE_THRESHOLD = 200;
 
-// Claude API limit: 5MB per image. Use 4.5MB as threshold to leave margin.
-const IMAGE_MAX_BYTES = 4.5 * 1024 * 1024;
 const IMAGE_MAX_DIMENSION = 512;
 const IMAGE_JPEG_QUALITY = 85;
 
-async function ensureImageUnderLimit(
+export async function compressImage(
   base64: string,
-  mimeType: string,
+  _mimeType: string,
 ): Promise<{ data: string; mimeType: string }> {
   const buf = Buffer.from(base64, "base64");
-  if (buf.length <= IMAGE_MAX_BYTES) return { data: base64, mimeType };
-
   const resized = await sharp(buf)
     .resize(IMAGE_MAX_DIMENSION, IMAGE_MAX_DIMENSION, { fit: "inside" })
     .jpeg({ quality: IMAGE_JPEG_QUALITY })
@@ -215,9 +211,9 @@ export class AgentManager {
     const managed = this.sessions.get(sessionId);
     if (!managed) throw new Error(`Session ${sessionId} not found`);
 
-    // Update title from first user message
+    // Update title from first user message (strip <system> tags from canvas attachments)
     if (managed.title === "New conversation") {
-      managed.title = text.slice(0, 100);
+      managed.title = text.replace(/<system>[\s\S]*?<\/system>/g, "").trim().slice(0, 100);
     }
 
     // Auto-save long user messages to file for prompt persistence.
@@ -242,7 +238,7 @@ export class AgentManager {
     const images = rawImages.length > 0
       ? await Promise.all(
           rawImages.map(async (a) => {
-            const { data, mimeType } = await ensureImageUnderLimit(a.data, a.mimeType);
+            const { data, mimeType } = await compressImage(a.data, a.mimeType);
             return { type: "image" as const, data, mimeType };
           }),
         )

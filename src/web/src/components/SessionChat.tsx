@@ -48,7 +48,6 @@ import type {
   UIThinkingBlock,
   UIToolCallBlock,
 } from "../hooks/use-agent.js";
-import { resizeImageBase64 } from "../lib/utils.js";
 import type { CanvasContext } from "./AgentPanel.js";
 import { DiffView } from "./DiffView";
 
@@ -285,8 +284,8 @@ function ThinkingView({ block }: { block: UIThinkingBlock }) {
 
 // -- Message Rendering --
 
-function stripCanvasAttachmentPrefix(content: string): string {
-  return content.replace(/^<system>\n[\s\S]*?\n<\/system>\n\n/, "");
+export function stripSystemTags(content: string): string {
+  return content.replace(/<system>[\s\S]*?<\/system>/g, "").trim();
 }
 
 interface AttachmentMeta {
@@ -320,7 +319,7 @@ function parseCanvasAttachmentMeta(content: string): AttachmentMeta[] {
 }
 
 function UserMessageView({ content, images }: { content: string; images?: UIImageAttachment[] }) {
-  const displayContent = stripCanvasAttachmentPrefix(content);
+  const displayContent = stripSystemTags(content);
   const attachmentMeta = parseCanvasAttachmentMeta(content);
   const imagesByName = new Map(
     images?.filter((img) => img.name).map((img) => [img.name, img]) ?? [],
@@ -413,9 +412,9 @@ function AssistantMessageView({ message }: { message: UIAssistantMessage }) {
         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
       )}
       {message.errorMessage && (
-        <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <X className="h-4 w-4 shrink-0 mt-0.5" />
-          <span className="break-words">{message.errorMessage}</span>
+        <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive overflow-hidden min-w-0">
+          <X className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span className="break-all min-w-0">{message.errorMessage}</span>
         </div>
       )}
     </div>
@@ -574,8 +573,7 @@ export function InputBox({
       });
       const base64 = raw.split(",")[1];
       const mimeType = file.type || "image/png";
-      const resized = await resizeImageBase64(base64, mimeType);
-      const attachment = await canvasContext.addImageToCanvas(resized.data, resized.mimeType);
+      const attachment = await canvasContext.addImageToCanvas(base64, mimeType);
       if (attachment && !mentionAttachments.some((a) => a.path === attachment.path)) {
         setMentionAttachments((prev) => [...prev, attachment]);
       }
@@ -623,7 +621,7 @@ export function InputBox({
     textareaRef.current?.focus();
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = () => {
     const trimmed = text.trim();
 
     // Collect canvas attachments (selection + mentions, deduplicated)
@@ -636,7 +634,7 @@ export function InputBox({
     let allAtts: Attachment[] = [];
 
     if (canvasAtts.length > 0) {
-      const { text: enrichedText, imageAttachments } = await buildMessageWithAttachments(
+      const { text: enrichedText, imageAttachments } = buildMessageWithAttachments(
         finalText,
         canvasAtts,
       );
@@ -993,7 +991,7 @@ export function SessionChat({
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <span className="text-sm font-medium truncate flex-1">{state.info.title}</span>
+        <span className="text-sm font-medium truncate flex-1">{stripSystemTags(state.info.title)}</span>
         {state.info.isStreaming && (
           <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
         )}
@@ -1022,7 +1020,7 @@ export function SessionChat({
               ) as UIToolCallBlock[];
               return (
                 <Fragment key={msgKey}>
-                  {(textBlocks.length > 0 || msg.isStreaming) && (
+                  {(textBlocks.length > 0 || msg.isStreaming || msg.errorMessage) && (
                     <AssistantMessageView message={{ ...msg, content: textBlocks }} />
                   )}
                   {toolBlocks.map((block) => (

@@ -6,7 +6,6 @@ import { AgentPanel } from "./components/AgentPanel.js";
 import { CanvasEditor } from "./components/CanvasEditor.js";
 import { useAgent } from "./hooks/use-agent.js";
 import { useCanvasSelection } from "./hooks/useCanvasSelection.js";
-import { resizeImageBase64 } from "./lib/utils.js";
 
 const PANEL_WIDTH = 380;
 
@@ -63,15 +62,14 @@ export function App() {
         const result = await editor.toImage(shapeIds, { format: "png", background: true });
         if (!result?.blob) throw new Error("Export returned null");
         const reader = new FileReader();
-        reader.onload = async () => {
+        reader.onload = () => {
           const dataUrl = reader.result as string;
           const base64 = dataUrl.split(",")[1];
-          const resized = await resizeImageBase64(base64, "image/png");
           agent.sendMsg({
             type: "screenshot_response",
             requestId,
-            data: resized.data,
-            mimeType: resized.mimeType,
+            data: base64,
+            mimeType: "image/png",
           });
         };
         reader.onerror = () => {

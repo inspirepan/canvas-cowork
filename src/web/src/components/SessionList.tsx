@@ -9,7 +9,7 @@ import type {
   ThinkingLevel,
 } from "../../../shared/protocol.js";
 import type { CanvasContext } from "./AgentPanel.js";
-import { InputBox } from "./SessionChat.js";
+import { InputBox, stripSystemTags } from "./SessionChat.js";
 
 function formatRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -73,7 +73,7 @@ export function SessionList({
       <Separator className="shrink-0" />
 
       {/* Session list */}
-      <ScrollArea className="flex-1 min-h-0">
+      <ScrollArea className="flex-1 min-h-0 [&>[data-slot=scroll-area-viewport]>div]:!block">
         <div className="py-1">
           {sessions.length === 0 ? (
             <div className="px-4 py-12 text-center">
@@ -84,12 +84,12 @@ export function SessionList({
               <button
                 type="button"
                 key={session.id}
-                className="w-full text-left px-4 py-2.5 hover:bg-accent transition-colors flex items-center gap-2 group"
+                className="w-full text-left px-4 py-2.5 hover:bg-accent transition-colors flex items-center gap-2 group min-w-0"
                 onClick={() => onSelectSession(session)}
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm truncate flex-1 text-foreground">{session.title}</span>
+                    <span className="text-sm truncate flex-1 text-foreground">{stripSystemTags(session.title)}</span>
                     <span className="text-xs text-muted-foreground shrink-0">
                       {formatRelativeTime(session.modifiedAt)}
                     </span>

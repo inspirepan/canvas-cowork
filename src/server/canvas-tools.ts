@@ -2,6 +2,7 @@ import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { compressImage } from "./agent-manager.js";
 import type { CanvasFS, CanvasJsonData } from "./canvas-fs.js";
 
 // -- System prompt for Canvas FS awareness (loaded from markdown file) --
@@ -108,8 +109,9 @@ function createCanvasScreenshotTool(screenshotCallback: ScreenshotCallback): Too
           details: {},
         };
       }
+      const compressed = await compressImage(result.data, result.mimeType);
       return {
-        content: [{ type: "image", data: result.data, mimeType: result.mimeType }],
+        content: [{ type: "image", data: compressed.data, mimeType: compressed.mimeType }],
         details: {},
       };
     },
@@ -281,7 +283,8 @@ function createGenerateImageTool(canvasDir: string): ToolDefinition {
       }
 
       const imageBuffer = readFileSync(outputPath);
-      const base64 = imageBuffer.toString("base64");
+      const rawBase64 = imageBuffer.toString("base64");
+      const compressed = await compressImage(rawBase64, "image/png");
 
       const resultContent: { type: "text"; text: string }[] = [
         { type: "text" as const, text: `Image saved to canvas/${filename}` },
@@ -302,7 +305,7 @@ function createGenerateImageTool(canvasDir: string): ToolDefinition {
       return {
         content: [
           ...resultContent,
-          { type: "image" as const, data: base64, mimeType: "image/png" },
+          { type: "image" as const, data: compressed.data, mimeType: compressed.mimeType },
         ],
         details: { path: `canvas/${filename}` },
       };

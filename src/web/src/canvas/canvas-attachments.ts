@@ -1,5 +1,4 @@
 import type { Attachment } from "../../../shared/protocol.js";
-import { resizeImageBase64 } from "../lib/utils.js";
 
 export interface CanvasAttachment {
   shapeId: string;
@@ -27,10 +26,10 @@ function formatAttachment(a: CanvasAttachment): string {
 }
 
 // Build the message text with <doc> wrappers and extract image attachments
-export async function buildMessageWithAttachments(
+export function buildMessageWithAttachments(
   userMessage: string,
   canvasAttachments: CanvasAttachment[],
-): Promise<{ text: string; imageAttachments: Attachment[] }> {
+): { text: string; imageAttachments: Attachment[] } {
   const rawImages: { data: string; mimeType: string; name: string }[] = [];
 
   // Collect image attachments (including from frame children)
@@ -48,17 +47,12 @@ export async function buildMessageWithAttachments(
   }
   collectImages(canvasAttachments);
 
-  const imageAttachments: Attachment[] = await Promise.all(
-    rawImages.map(async (img) => {
-      const resized = await resizeImageBase64(img.data, img.mimeType);
-      return {
-        type: "image" as const,
-        data: resized.data,
-        mimeType: resized.mimeType,
-        name: img.name,
-      };
-    }),
-  );
+  const imageAttachments: Attachment[] = rawImages.map((img) => ({
+    type: "image" as const,
+    data: img.data,
+    mimeType: img.mimeType,
+    name: img.name,
+  }));
 
   if (canvasAttachments.length === 0) {
     return { text: userMessage, imageAttachments };
