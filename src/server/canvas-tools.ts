@@ -131,11 +131,13 @@ function createGenerateImageTool(canvasDir: string): ToolDefinition {
 - Supports up to 14 input images for multi-image composition.`,
     parameters: Type.Object({
       name: Type.String({
-        description: "Output image filename (e.g. 'sunset-mountains.png'). Saved under canvas/.",
+        description:
+          "Output image filename. Use the user's language for the name (e.g. 'sunset-mountains.png' for English, '日落山脉.png' for Chinese). Saved under canvas/.",
       }),
       prompt: Type.Optional(
         Type.String({
-          description: "Image generation/editing prompt. Either prompt or prompt_file must be provided.",
+          description:
+            "Image generation/editing prompt. For multi-image inputs, reference images by index and describe how they interact (e.g. \"apply Image 2's style to Image 1\", \"put the bird from Image 1 on the elephant in Image 2\"). Either prompt or prompt_file must be provided.",
         }),
       ),
       prompt_file: Type.Optional(
@@ -154,7 +156,7 @@ function createGenerateImageTool(canvasDir: string): ToolDefinition {
             }),
             description: Type.String({
               description:
-                'How to use this image, e.g. "reference this image\'s style", "edit this image, keep the background unchanged"',
+                'Brief description of what is in the image, e.g. "a product photo of red sneakers on white background", "a watercolor painting of a village with soft pastel tones"',
             }),
           }),
           { description: "Reference/input images with their roles and usage descriptions" },
@@ -218,6 +220,13 @@ function createGenerateImageTool(canvasDir: string): ToolDefinition {
       if (!/\.\w+$/.test(filename)) filename += ".png";
       const outputPath = join(canvasDir, filename);
 
+      // Save prompt file before calling the model for traceability
+      const PROMPT_FILE_THRESHOLD = 200;
+      let savedPromptFilePath: string | null = null;
+      if (prompt.length > PROMPT_FILE_THRESHOLD && !params.prompt_file) {
+        savedPromptFilePath = savePromptFile(canvasDir, prompt, filename);
+      }
+
       // Build command args
       const args = ["run", "--quiet", GENERATE_IMAGE_SCRIPT, "--prompt", prompt, "--filename", outputPath];
 
@@ -274,20 +283,15 @@ function createGenerateImageTool(canvasDir: string): ToolDefinition {
       const imageBuffer = readFileSync(outputPath);
       const base64 = imageBuffer.toString("base64");
 
-      // Auto-save long prompts to file for reuse in subsequent iterations
-      const PROMPT_FILE_THRESHOLD = 200;
       const resultContent: { type: "text"; text: string }[] = [
         { type: "text" as const, text: `Image saved to canvas/${filename}` },
       ];
 
-      if (prompt.length > PROMPT_FILE_THRESHOLD && !params.prompt_file) {
-        const promptFilePath = savePromptFile(canvasDir, prompt, filename);
-        if (promptFilePath) {
-          resultContent.push({
-            type: "text" as const,
-            text: `<system>The image generation prompt has been saved to ${promptFilePath}. For regeneration or iteration, pass this path as prompt_file to avoid re-typing the full prompt. To modify the prompt, use the Edit tool on the file then pass it as prompt_file. If the user wants to iteratively edit the generated image, use the image as a reference_image with role "edit_target" along with the editing instruction.</system>`,
-          });
-        }
+      if (savedPromptFilePath) {
+        resultContent.push({
+          type: "text" as const,
+          text: `<system>The image generation prompt has been saved to ${savedPromptFilePath}. For regeneration or iteration, pass this path as prompt_file to avoid re-typing the full prompt. To modify the prompt, use the Edit tool on the file then pass it as prompt_file. If the user wants to iteratively edit the generated image, use the image as a reference_image with role "edit_target" along with the editing instruction.</system>`,
+        });
       } else if (params.prompt_file) {
         resultContent.push({
           type: "text" as const,
