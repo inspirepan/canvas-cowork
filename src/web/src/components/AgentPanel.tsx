@@ -65,6 +65,7 @@ export function AgentPanel({
       }}
       onCreateSession={agent.createSessionWithPrompt}
       onDeleteSession={(sessionId) => agent.deleteSession(sessionId)}
+      onNewSession={agent.createSession}
       models={agent.models}
       defaultModel={agent.defaultModel}
       defaultThinkingLevel={agent.defaultThinkingLevel}

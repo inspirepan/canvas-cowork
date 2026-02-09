@@ -1,4 +1,4 @@
-import { Loader2, Trash2 } from "lucide-react";
+import { Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -31,6 +31,7 @@ interface SessionListProps {
   onSelectSession: (session: SessionInfo) => void;
   onCreateSession: (text: string, attachments?: Attachment[]) => void;
   onDeleteSession: (sessionId: string) => void;
+  onNewSession: () => void;
   models: ModelInfo[];
   defaultModel: ModelInfo | null;
   defaultThinkingLevel: ThinkingLevel;
@@ -45,6 +46,7 @@ export function SessionList({
   onSelectSession,
   onCreateSession,
   onDeleteSession,
+  onNewSession,
   models,
   defaultModel,
   defaultThinkingLevel,
@@ -58,6 +60,14 @@ export function SessionList({
       {/* Header */}
       <div className="flex items-center justify-between px-4 pt-4 pb-3">
         <h2 className="text-sm font-medium text-foreground">Tasks</h2>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={onNewSession}
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
       </div>
 
       <Separator />

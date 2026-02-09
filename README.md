@@ -40,7 +40,7 @@ The chat input supports `@` mentions to reference canvas elements and attaching 
 - **Canvas**: [tldraw](https://tldraw.dev) v4
 - **Frontend**: React 19, Tailwind CSS v4, shadcn/ui
 - **Build**: Vite
-- **Agent**: Anthropic Claude via [picoagent](https://github.com/nicobailon/pi-coding-agent)
+- **Agent**: Anthropic Claude via [pi-coding-agent](https://github.com/nicobailon/pi-coding-agent)
 
 ## Getting Started
 
