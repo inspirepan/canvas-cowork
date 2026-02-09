@@ -137,6 +137,10 @@ function ToolCallView({ block }: { block: UIToolCallBlock }) {
     .map((c) => c.text ?? "")
     .join("");
 
+  const resultImages = block.result?.content?.filter(
+    (c) => c.type === "image" && c.data,
+  ) as Array<{ type: string; data: string; mimeType?: string }> | undefined;
+
   const filePath = args && typeof args.path === "string" ? args.path : undefined;
 
   const detailsDiff =
@@ -225,6 +229,19 @@ function ToolCallView({ block }: { block: UIToolCallBlock }) {
                 ? `${resultText.slice(0, 2000)}\n... (truncated)`
                 : resultText}
             </pre>
+          )}
+          {resultImages && resultImages.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {resultImages.map((img, i) => (
+                <img
+                  // biome-ignore lint/suspicious/noArrayIndexKey: result images have no stable ID
+                  key={i}
+                  src={`data:${img.mimeType || "image/png"};base64,${img.data}`}
+                  alt="tool result"
+                  className="rounded-md max-h-48 max-w-full object-contain"
+                />
+              ))}
+            </div>
           )}
         </div>
       </CollapsibleContent>
@@ -441,7 +458,7 @@ export function InputBox({
       ta.style.height = "auto";
       ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
     }
-  }, []);
+  }, [text]);
 
   const thinkingLabels: Record<string, string> = {
     off: "Off",

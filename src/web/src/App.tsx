@@ -92,9 +92,9 @@ export function App() {
   }, [editor, agent.sendMsg, agent.onScreenshotRequest, agent]);
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex relative">
+    <div className="h-dvh w-full overflow-hidden flex relative">
       {/* Canvas - takes remaining space */}
-      <div className="h-full flex-1">
+      <div className="h-full flex-1 min-w-0">
         <CanvasEditor onMount={handleMount} />
       </div>
 
