@@ -60,11 +60,15 @@ function loadImageDimensions(src: string): Promise<{ w: number; h: number }> {
   });
 }
 
-// Position calculation for new shapes
+// Layout constants
 const SHAPE_SPACING = 20;
 const DEFAULT_WIDTH = 200;
-const DEFAULT_FRAME_WIDTH = 300;
+const DEFAULT_FRAME_WIDTH = 320;
 const DEFAULT_FRAME_HEIGHT = 200;
+const FRAME_INNER_PADDING = 20;
+const FRAME_HEADER_OFFSET = 44; // Space below frame header (32px header + 12px gap)
+const FADE_IN_DURATION = 300;
+const FADE_OUT_DURATION = 200;
 
 export class CanvasSync {
   private editor: Editor;
@@ -73,6 +77,8 @@ export class CanvasSync {
   private fileToShape = new Map<string, string>(); // relative path -> shapeId
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribe: (() => void) | null = null;
+  // Shapes pending fade-out deletion (ignore FS events for these)
+  private pendingDeletes = new Set<string>();
 
   constructor(editor: Editor, sendMsg: (msg: ClientMessage) => void) {
     this.editor = editor;
@@ -356,8 +362,10 @@ export class CanvasSync {
   // -- FS -> Canvas sync (agent/external edits) --
 
   handleFSChanges(changes: CanvasFSEvent[]): void {
-    // Separate sync (text/frame/delete) and async (image create) changes
-    const syncChanges: CanvasFSEvent[] = [];
+    // Categorize changes
+    const syncCreates: CanvasFSEvent[] = [];
+    const syncModifies: CanvasFSEvent[] = [];
+    const syncDeletes: CanvasFSEvent[] = [];
     const asyncImageCreates: CanvasFSEvent[] = [];
 
     for (const change of changes) {
@@ -367,21 +375,66 @@ export class CanvasSync {
         this.inferShapeType(change.path) === "image"
       ) {
         asyncImageCreates.push(change);
+      } else if (change.action === "deleted") {
+        syncDeletes.push(change);
+      } else if (change.action === "modified") {
+        syncModifies.push(change);
       } else {
-        syncChanges.push(change);
+        syncCreates.push(change);
       }
     }
 
-    // Apply sync changes immediately
-    if (syncChanges.length > 0) {
+    // Detect moves: a delete followed by a create of the same filename
+    // (with the same base name, just different directory).
+    // This happens when `mv canvas/a.txt canvas/folder/a.txt`.
+    const moves = this.detectMoves(syncDeletes, syncCreates);
+    for (const move of moves) {
+      // Remove from pending create/delete lists
+      const delIdx = syncDeletes.indexOf(move.deleteEvent);
+      if (delIdx >= 0) syncDeletes.splice(delIdx, 1);
+      const createIdx = syncCreates.indexOf(move.createEvent);
+      if (createIdx >= 0) syncCreates.splice(createIdx, 1);
+    }
+
+    // Handle moves with reparent animation
+    if (moves.length > 0) {
+      this.handleFSMoves(moves);
+    }
+
+    // Handle creates + modifies inside mergeRemoteChanges
+    const createdShapeIds: TLShapeId[] = [];
+    const toProcess = [...syncCreates, ...syncModifies];
+    if (toProcess.length > 0) {
       this.applyRemote(() => {
-        for (const change of syncChanges) {
-          this.applyFSChangeSync(change);
+        for (const change of toProcess) {
+          const id = this.applyFSChangeSync(change);
+          if (id) createdShapeIds.push(id);
         }
       });
     }
 
-    // Apply async image creates
+    // Fade-in animation for newly created shapes
+    if (createdShapeIds.length > 0) {
+      requestAnimationFrame(() => {
+        this.editor.animateShapes(
+          createdShapeIds
+            .map((id) => {
+              const shape = this.editor.getShape(id);
+              if (!shape) return null;
+              return { id, type: shape.type, opacity: 1 as const };
+            })
+            .filter(Boolean),
+          { animation: { duration: FADE_IN_DURATION } },
+        );
+      });
+    }
+
+    // Handle deletes with fade-out animation
+    for (const change of syncDeletes) {
+      this.handleFSDeletedAnimated(change);
+    }
+
+    // Handle async image creates
     for (const change of asyncImageCreates) {
       this.createImageFromFS(change);
     }
@@ -389,22 +442,127 @@ export class CanvasSync {
     this.scheduleSave();
   }
 
-  private applyFSChangeSync(event: CanvasFSEvent): void {
-    switch (event.action) {
-      case "created":
-        this.handleFSCreatedSync(event);
-        break;
-      case "modified":
-        this.handleFSModified(event);
-        break;
-      case "deleted":
-        this.handleFSDeleted(event);
-        break;
+  private detectMoves(
+    deletes: CanvasFSEvent[],
+    creates: CanvasFSEvent[],
+  ): { deleteEvent: CanvasFSEvent; createEvent: CanvasFSEvent }[] {
+    const moves: { deleteEvent: CanvasFSEvent; createEvent: CanvasFSEvent }[] = [];
+    const usedCreates = new Set<number>();
+
+    for (const del of deletes) {
+      if (del.isDirectory) continue;
+      const delName = pathToName(del.path);
+      const delExt = del.path.split(".").pop() ?? "";
+
+      for (let i = 0; i < creates.length; i++) {
+        if (usedCreates.has(i)) continue;
+        const create = creates[i];
+        if (create.isDirectory) continue;
+        const createName = pathToName(create.path);
+        const createExt = create.path.split(".").pop() ?? "";
+
+        // Same filename (name + extension), different directory = move
+        if (delName === createName && delExt === createExt && del.path !== create.path) {
+          // Must have an existing shape for the deleted path
+          if (this.fileToShape.has(del.path)) {
+            moves.push({ deleteEvent: del, createEvent: create });
+            usedCreates.add(i);
+            break;
+          }
+        }
+      }
+    }
+    return moves;
+  }
+
+  private handleFSMoves(moves: { deleteEvent: CanvasFSEvent; createEvent: CanvasFSEvent }[]): void {
+    for (const { deleteEvent, createEvent } of moves) {
+      const shapeId = this.fileToShape.get(deleteEvent.path);
+      if (!shapeId) continue;
+
+      const shape = this.editor.getShape(shapeId as TLShapeId);
+      if (!shape) continue;
+
+      // Get old page-space position before reparent
+      const oldPageBounds = this.editor.getShapePageBounds(shape);
+
+      // Determine new parent
+      const newDir = pathToDir(createEvent.path);
+      const newParentId = newDir ? this.getFrameShapeId(newDir) : null;
+      const newPos = newParentId ? this.findPositionInFrame(newParentId) : this.findOpenPosition();
+
+      // Update mapping
+      this.fileToShape.delete(deleteEvent.path);
+      this.shapeToFile.set(shapeId, createEvent.path);
+      this.fileToShape.set(createEvent.path, shapeId);
+
+      // Reparent and move
+      this.applyRemote(() => {
+        const targetParent = newParentId
+          ? (newParentId as TLParentId)
+          : this.editor.getCurrentPageId();
+        this.editor.reparentShapes([shapeId as TLShapeId], targetParent);
+        this.editor.updateShape({
+          id: shapeId as TLShapeId,
+          type: shape.type,
+          x: newPos.x,
+          y: newPos.y,
+        });
+
+        // Update text content if provided
+        if (createEvent.content !== undefined && shape.type === "named_text") {
+          this.editor.updateShape({
+            id: shapeId as TLShapeId,
+            type: "named_text",
+            props: { text: createEvent.content },
+          });
+        }
+      });
+
+      // Animate from old position to new position if we have old bounds
+      if (oldPageBounds) {
+        const newPageBounds = this.editor.getShapePageBounds(shapeId as TLShapeId);
+        if (newPageBounds) {
+          const dx = oldPageBounds.x - newPageBounds.x;
+          const dy = oldPageBounds.y - newPageBounds.y;
+          if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+            // Temporarily offset shape to old position, then animate to new
+            this.applyRemote(() => {
+              this.editor.updateShape({
+                id: shapeId as TLShapeId,
+                type: shape.type,
+                x: newPos.x + dx,
+                y: newPos.y + dy,
+              });
+            });
+            requestAnimationFrame(() => {
+              this.editor.animateShapes(
+                [{ id: shapeId as TLShapeId, type: shape.type, x: newPos.x, y: newPos.y }],
+                { animation: { duration: FADE_IN_DURATION } },
+              );
+            });
+          }
+        }
+      }
     }
   }
 
-  private handleFSCreatedSync(event: CanvasFSEvent): void {
-    if (this.fileToShape.has(event.path)) return;
+  private applyFSChangeSync(event: CanvasFSEvent): TLShapeId | null {
+    switch (event.action) {
+      case "created":
+        return this.handleFSCreatedSync(event);
+      case "modified":
+        this.handleFSModified(event);
+        return null;
+      case "deleted":
+        this.handleFSDeleted(event);
+        return null;
+    }
+    return null;
+  }
+
+  private handleFSCreatedSync(event: CanvasFSEvent): TLShapeId | null {
+    if (this.fileToShape.has(event.path)) return null;
 
     if (event.isDirectory) {
       const name = pathToName(event.path);
@@ -415,31 +573,36 @@ export class CanvasSync {
         type: "frame",
         x: pos.x,
         y: pos.y,
+        opacity: 0,
         props: { w: DEFAULT_FRAME_WIDTH, h: DEFAULT_FRAME_HEIGHT, name },
       });
       this.shapeToFile.set(id, event.path);
       this.fileToShape.set(event.path, id);
-    } else {
-      const shapeType = this.inferShapeType(event.path);
-      if (shapeType === "named_text") {
-        const name = pathToName(event.path);
-        const dir = pathToDir(event.path);
-        const parentId = dir ? this.getFrameShapeId(dir) : null;
-        const id = createShapeId();
-        const pos = parentId ? this.findPositionInFrame(parentId) : this.findOpenPosition();
-
-        this.editor.createShape({
-          id,
-          type: "named_text",
-          ...(parentId ? { parentId: parentId as TLParentId } : {}),
-          x: pos.x,
-          y: pos.y,
-          props: { name, text: event.content ?? "", w: DEFAULT_WIDTH },
-        });
-        this.shapeToFile.set(id, event.path);
-        this.fileToShape.set(event.path, id);
-      }
+      return id;
     }
+
+    const shapeType = this.inferShapeType(event.path);
+    if (shapeType === "named_text") {
+      const name = pathToName(event.path);
+      const dir = pathToDir(event.path);
+      const parentId = dir ? this.getFrameShapeId(dir) : null;
+      const id = createShapeId();
+      const pos = parentId ? this.findPositionInFrame(parentId) : this.findOpenPosition();
+
+      this.editor.createShape({
+        id,
+        type: "named_text",
+        ...(parentId ? { parentId: parentId as TLParentId } : {}),
+        x: pos.x,
+        y: pos.y,
+        opacity: 0,
+        props: { name, text: event.content ?? "", w: DEFAULT_WIDTH },
+      });
+      this.shapeToFile.set(id, event.path);
+      this.fileToShape.set(event.path, id);
+      return id;
+    }
+    return null;
   }
 
   private async createImageFromFS(event: CanvasFSEvent): Promise<void> {
@@ -485,18 +648,26 @@ export class CanvasSync {
         }),
       ]);
 
-      // Create image shape
+      // Create image shape at opacity 0 for fade-in
       this.editor.createShape({
         id: shapeId,
         type: "image",
         ...(parentId ? { parentId: parentId as TLParentId } : {}),
         x: pos.x,
         y: pos.y,
+        opacity: 0,
         props: {
           w: displayW,
           h: displayH,
           assetId: assetId as TLAssetId,
         },
+      });
+    });
+
+    // Fade in
+    requestAnimationFrame(() => {
+      this.editor.animateShapes([{ id: shapeId, type: "image" as const, opacity: 1 as const }], {
+        animation: { duration: FADE_IN_DURATION },
       });
     });
 
@@ -520,6 +691,7 @@ export class CanvasSync {
     });
   }
 
+  // Immediate delete (used inside mergeRemoteChanges during init/reconcile)
   private handleFSDeleted(event: CanvasFSEvent): void {
     const shapeId = this.fileToShape.get(event.path);
     if (!shapeId) return;
@@ -545,6 +717,71 @@ export class CanvasSync {
         this.fileToShape.delete(path);
       }
     }
+  }
+
+  // Animated delete: fade out then remove (used for agent-driven changes)
+  private handleFSDeletedAnimated(event: CanvasFSEvent): void {
+    const shapeId = this.fileToShape.get(event.path);
+    if (!shapeId) return;
+
+    const shape = this.editor.getShape(shapeId as TLShapeId);
+    if (!shape) {
+      this.shapeToFile.delete(shapeId);
+      this.fileToShape.delete(event.path);
+      return;
+    }
+
+    // Collect all shape IDs to delete (including directory children)
+    const idsToDelete: TLShapeId[] = [shapeId as TLShapeId];
+    if (event.isDirectory) {
+      const prefix = `${event.path}/`;
+      for (const [path, sid] of this.fileToShape.entries()) {
+        if (path.startsWith(prefix)) {
+          idsToDelete.push(sid as TLShapeId);
+        }
+      }
+    }
+
+    // Mark as pending so we don't re-process
+    for (const id of idsToDelete) {
+      this.pendingDeletes.add(id);
+    }
+
+    // Animate opacity to 0
+    this.editor.animateShapes(
+      idsToDelete
+        .map((id) => {
+          const s = this.editor.getShape(id);
+          if (!s) return null;
+          return { id, type: s.type, opacity: 0 as const };
+        })
+        .filter(Boolean),
+      { animation: { duration: FADE_OUT_DURATION } },
+    );
+
+    // After animation, delete shapes
+    setTimeout(() => {
+      this.applyRemote(() => {
+        for (const id of idsToDelete) {
+          const s = this.editor.getShape(id);
+          if (s) this.editor.deleteShape(id);
+          this.pendingDeletes.delete(id);
+        }
+      });
+      // Clean up mappings
+      this.shapeToFile.delete(shapeId);
+      this.fileToShape.delete(event.path);
+      if (event.isDirectory) {
+        const prefix = `${event.path}/`;
+        for (const [path, sid] of [...this.fileToShape.entries()]) {
+          if (path.startsWith(prefix)) {
+            this.shapeToFile.delete(sid);
+            this.fileToShape.delete(path);
+          }
+        }
+      }
+      this.scheduleSave();
+    }, FADE_OUT_DURATION + 50);
   }
 
   // -- Bootstrap & reconciliation --
@@ -724,48 +961,102 @@ export class CanvasSync {
   }
 
   private findOpenPosition(): { x: number; y: number } {
-    const shapes = [...this.editor.getCurrentPageShapeIds()]
-      .map((id) => this.editor.getShape(id))
-      .filter(Boolean);
-
-    if (shapes.length === 0) {
-      return { x: 100, y: 100 };
-    }
-
-    // Find the bottom-most shape and place below it
-    let maxY = 0;
-    for (const shape of shapes) {
+    // Collect page-level bounds of all top-level shapes
+    const shapeBounds: { x: number; y: number; w: number; h: number }[] = [];
+    for (const id of this.editor.getCurrentPageShapeIds()) {
+      const shape = this.editor.getShape(id);
       if (!shape) continue;
+      // Only consider top-level shapes (not children of frames)
+      if (shape.parentId !== this.editor.getCurrentPageId()) continue;
       const bounds = this.editor.getShapePageBounds(shape);
       if (bounds) {
-        const bottom = bounds.y + bounds.h;
-        if (bottom > maxY) maxY = bottom;
+        shapeBounds.push({ x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h });
       }
     }
 
-    return { x: 100, y: maxY + SHAPE_SPACING };
+    if (shapeBounds.length === 0) {
+      // Place near viewport center
+      try {
+        const center = this.editor.getViewportScreenCenter();
+        const pagePoint = this.editor.screenToPage(center);
+        return { x: Math.round(pagePoint.x - DEFAULT_WIDTH / 2), y: Math.round(pagePoint.y) };
+      } catch {
+        return { x: 100, y: 100 };
+      }
+    }
+
+    // Try placing near viewport center first
+    try {
+      const center = this.editor.getViewportScreenCenter();
+      const pageCenter = this.editor.screenToPage(center);
+      const candidate = {
+        x: Math.round(pageCenter.x - DEFAULT_WIDTH / 2),
+        y: Math.round(pageCenter.y),
+      };
+      if (!this.overlapsAny(candidate.x, candidate.y, DEFAULT_WIDTH, 60, shapeBounds)) {
+        return candidate;
+      }
+    } catch {
+      // fallback below
+    }
+
+    // Find a column-based layout position: place in the first column that has space
+    // Sort existing shapes by x to find columns
+    let maxY = 0;
+    let columnX = 100;
+    for (const b of shapeBounds) {
+      const bottom = b.y + b.h;
+      if (bottom > maxY) {
+        maxY = bottom;
+        columnX = b.x;
+      }
+    }
+
+    const candidate = { x: columnX, y: maxY + SHAPE_SPACING };
+    if (!this.overlapsAny(candidate.x, candidate.y, DEFAULT_WIDTH, 60, shapeBounds)) {
+      return candidate;
+    }
+
+    // Last resort: place to the right of all existing shapes
+    let maxRight = 0;
+    for (const b of shapeBounds) {
+      maxRight = Math.max(maxRight, b.x + b.w);
+    }
+    return { x: maxRight + SHAPE_SPACING * 2, y: shapeBounds[0]?.y ?? 100 };
+  }
+
+  private overlapsAny(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    bounds: { x: number; y: number; w: number; h: number }[],
+  ): boolean {
+    for (const b of bounds) {
+      if (x < b.x + b.w && x + w > b.x && y < b.y + b.h && y + h > b.y) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private findPositionInFrame(frameShapeId: string): { x: number; y: number } {
     const childIds = this.editor.getSortedChildIdsForParent(frameShapeId as TLShapeId);
     if (childIds.length === 0) {
-      return { x: 16, y: 40 }; // Inside frame with padding, below frame label
+      return { x: FRAME_INNER_PADDING, y: FRAME_HEADER_OFFSET };
     }
 
-    // Stack below existing children
-    let maxY = 0;
+    // Stack below existing children with consistent spacing
+    let maxBottom = 0;
     for (const childId of childIds) {
       const child = this.editor.getShape(childId);
       if (!child) continue;
-      const bottom = child.y + (this.getShapeHeight(child) ?? 60);
-      if (bottom > maxY) maxY = bottom;
+      const geom = this.editor.getShapeGeometry(childId);
+      const h = geom ? geom.bounds.h : 60;
+      const bottom = child.y + h;
+      if (bottom > maxBottom) maxBottom = bottom;
     }
 
-    return { x: 16, y: maxY + SHAPE_SPACING };
-  }
-
-  private getShapeHeight(shape: { id: TLShapeId }): number | null {
-    const bounds = this.editor.getShapeGeometry(shape.id);
-    return bounds ? bounds.bounds.h : null;
+    return { x: FRAME_INNER_PADDING, y: maxBottom + SHAPE_SPACING };
   }
 }

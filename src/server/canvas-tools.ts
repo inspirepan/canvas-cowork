@@ -207,23 +207,64 @@ function parseCanvasState(canvasJson: CanvasJsonData, _canvasDir: string): Parse
     }
   }
 
-  // Also check for draw shapes overlapping images (by parent relationship)
-  // Draw shapes that are children of the same parent as an image, or
-  // that have their geometry overlapping an image, are considered annotations.
-  // For simplicity, we check draw shapes whose parentId matches a frame containing images.
+  // Check for draw shapes overlapping images using bounding box intersection.
+  // A draw shape whose bounds overlap an image's bounds is considered an annotation.
+  const imageShapes: { id: string; x: number; y: number; w: number; h: number }[] = [];
+  for (const [id, record] of shapeRecords) {
+    if (record.type !== "image") continue;
+    const props = record.props as Record<string, unknown> | undefined;
+    if (props && typeof record.x === "number" && typeof record.y === "number") {
+      const w = (props.w as number) ?? 0;
+      const h = (props.h as number) ?? 0;
+      if (w > 0 && h > 0) {
+        imageShapes.push({ id, x: record.x as number, y: record.y as number, w, h });
+      }
+    }
+  }
+
   for (const [_id, record] of shapeRecords) {
-    if (record.type === "draw") {
-      // Check if any arrow binds from this draw to an image
-      // (draw shapes typically don't have bindings, but we check parent proximity)
-      const parentId = record.parentId as string;
-      // If the draw shape shares a parent with an image, mark those images as annotated
-      for (const [imgId, imgRecord] of shapeRecords) {
-        if (imgRecord.type !== "image") continue;
-        if (imgRecord.parentId === parentId && shapeToFile[imgId]) {
-          // Same parent container - could be an annotation
-          // This is a heuristic; geometry overlap check would be more precise
-          annotatedImages.add(shapeToFile[imgId]);
+    if (record.type !== "draw") continue;
+    const drawX = (record.x as number) ?? 0;
+    const drawY = (record.y as number) ?? 0;
+    // Draw shapes store segments; estimate bounds from the shape record
+    const drawProps = record.props as Record<string, unknown> | undefined;
+    // tldraw draw shapes have segments with points; use a rough bounding approach
+    // Check against images in the same parent
+    const parentId = record.parentId as string;
+
+    for (const img of imageShapes) {
+      const imgRecord = shapeRecords.get(img.id);
+      if (!imgRecord) continue;
+      // Must share the same parent (page or frame)
+      if ((imgRecord.parentId as string) !== parentId) continue;
+
+      // Bounding box overlap check
+      // Draw shapes don't have explicit w/h in props, but we can check
+      // if the draw's origin is within or near the image bounds
+      const segments =
+        (drawProps?.segments as Array<{ points: Array<{ x: number; y: number }> }>) ?? [];
+      let drawMinX = drawX;
+      let drawMinY = drawY;
+      let drawMaxX = drawX;
+      let drawMaxY = drawY;
+      for (const seg of segments) {
+        for (const pt of seg.points ?? []) {
+          drawMinX = Math.min(drawMinX, drawX + pt.x);
+          drawMinY = Math.min(drawMinY, drawY + pt.y);
+          drawMaxX = Math.max(drawMaxX, drawX + pt.x);
+          drawMaxY = Math.max(drawMaxY, drawY + pt.y);
         }
+      }
+
+      // Check overlap
+      if (
+        drawMinX < img.x + img.w &&
+        drawMaxX > img.x &&
+        drawMinY < img.y + img.h &&
+        drawMaxY > img.y &&
+        shapeToFile[img.id]
+      ) {
+        annotatedImages.add(shapeToFile[img.id]);
       }
     }
   }

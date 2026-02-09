@@ -1,7 +1,9 @@
 import {
+  createShapeId,
   type Editor,
   type TLAssetStore,
   type TLComponents,
+  type TLEventInfo,
   type TLUiOverrides,
   Tldraw,
 } from "tldraw";
@@ -86,12 +88,35 @@ interface CanvasEditorProps {
   onMount?: (editor: Editor) => void;
 }
 
+const editorOptions = { createTextOnCanvasDoubleClick: false };
+
 export function CanvasEditor({ onMount }: CanvasEditorProps) {
   return (
     <div className="tldraw-container" style={{ width: "100%", height: "100%" }}>
       <Tldraw
         onMount={(editor) => {
           editorRef = editor;
+          // Double-click on canvas creates named_text instead of default text
+          editor.on("event", (info: TLEventInfo) => {
+            if (
+              info.name === "double_click" &&
+              info.type === "click" &&
+              info.target === "canvas" &&
+              !editor.getIsReadonly()
+            ) {
+              const { x, y } = editor.inputs.currentPagePoint;
+              const id = createShapeId();
+              editor.createShape({
+                id,
+                type: "named_text",
+                x,
+                y,
+                props: { name: "untitled", text: "", w: 200 },
+              });
+              editor.select(id);
+              editor.setEditingShape(id);
+            }
+          });
           onMount?.(editor);
         }}
         shapeUtils={customShapeUtils}
@@ -99,6 +124,7 @@ export function CanvasEditor({ onMount }: CanvasEditorProps) {
         components={customComponents}
         overrides={customOverrides}
         assets={canvasAssetStore}
+        options={editorOptions}
       />
     </div>
   );

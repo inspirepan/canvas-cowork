@@ -434,10 +434,12 @@ export function InputBox({
     }
   };
 
-  // Paste handler for images
+  // Paste handler for images (only intercept when clipboard has no text, e.g. screenshots)
   const handlePaste = (e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
     if (!items) return;
+    const hasText = Array.from(items).some((item) => item.type === "text/plain");
+    if (hasText) return;
     const imageFiles: File[] = [];
     for (const item of items) {
       if (item.type.startsWith("image/")) {
@@ -472,7 +474,7 @@ export function InputBox({
   const hasContent = text.trim() || attachments.length > 0;
 
   return (
-    <div className="shrink-0 bg-muted/40 p-3 space-y-2">
+    <form autoComplete="off" onSubmit={(e) => e.preventDefault()} className="shrink-0 bg-muted/40 p-3 space-y-2">
       {/* Attachment chips */}
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
@@ -609,7 +611,7 @@ export function InputBox({
           {isStreaming ? <Square className="h-3 w-3" /> : <ArrowUp className="h-3.5 w-3.5" />}
         </Button>
       </div>
-    </div>
+    </form>
   );
 }
 
@@ -647,7 +649,7 @@ export function SessionChat({
     isNearBottomRef.current = checkIfNearBottom();
   };
 
-  // Auto-scroll only when user is near bottom
+  // Auto-scroll when user is near bottom and messages change
   useEffect(() => {
     if (isNearBottomRef.current) {
       const el = scrollContainerRef.current;
@@ -655,7 +657,7 @@ export function SessionChat({
         el.scrollTop = el.scrollHeight;
       }
     }
-  }, []);
+  }, [state.messages]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
