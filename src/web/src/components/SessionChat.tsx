@@ -279,7 +279,7 @@ function ThinkingView({ block }: { block: UIThinkingBlock }) {
 function UserMessageView({ content, images }: { content: string; images?: UIImageAttachment[] }) {
   return (
     <div className="flex justify-end px-4 py-2">
-      <div className="bg-muted rounded-2xl rounded-br-md px-3.5 py-2 max-w-[85%] space-y-2">
+      <div className="bg-blue-50 dark:bg-blue-950/30 text-slate-600 dark:text-slate-300 rounded-2xl rounded-br-md px-3.5 py-2 max-w-[85%] space-y-2">
         {images && images.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {images.map((img, i) => (
@@ -293,7 +293,7 @@ function UserMessageView({ content, images }: { content: string; images?: UIImag
             ))}
           </div>
         )}
-        <p className="text-sm whitespace-pre-wrap">{content}</p>
+        <p className="prose prose-sm whitespace-pre-wrap">{content}</p>
       </div>
     </div>
   );
