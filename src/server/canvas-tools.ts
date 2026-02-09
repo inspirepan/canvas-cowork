@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import type { CanvasFS, CanvasJsonData } from "./canvas-fs.js";
 
 // -- System prompt for Canvas FS awareness (loaded from markdown file) --
@@ -28,6 +28,8 @@ export function createCanvasTools(
   if (screenshotCallback) {
     tools.push(createCanvasScreenshotTool(screenshotCallback));
   }
+
+  tools.push(createGenerateImageTool(canvasFS.canvasDir));
 
   return tools;
 }
@@ -109,6 +111,174 @@ function createCanvasScreenshotTool(screenshotCallback: ScreenshotCallback): Too
       return {
         content: [{ type: "image", data: result.data, mimeType: result.mimeType }],
         details: {},
+      };
+    },
+  };
+}
+
+// -- generate_image tool --
+
+const GENERATE_IMAGE_SCRIPT = join(import.meta.dir, "../../scripts/generate_image.py");
+
+function createGenerateImageTool(canvasDir: string): ToolDefinition {
+  return {
+    name: "generate_image",
+    label: "Generate Image",
+    description: `Generate or edit images using AI (Gemini image generation).
+- For pure generation: provide a text prompt describing the desired image.
+- For editing/composition: provide reference images along with a prompt describing the desired changes.
+- Generated images are saved to the canvas/ directory and appear on the user's canvas.
+- Supports up to 14 input images for multi-image composition.`,
+    parameters: Type.Object({
+      name: Type.String({
+        description: "Output image filename (e.g. 'sunset-mountains.png'). Saved under canvas/.",
+      }),
+      prompt: Type.Optional(
+        Type.String({
+          description: "Image generation/editing prompt. Either prompt or prompt_file must be provided.",
+        }),
+      ),
+      prompt_file: Type.Optional(
+        Type.String({
+          description:
+            "Path to a text file containing the generation prompt. Use this for long/complex prompts. Takes precedence over prompt.",
+        }),
+      ),
+      reference_images: Type.Optional(
+        Type.Array(
+          Type.Object({
+            file_path: Type.String({ description: "Path to the image file" }),
+            role: Type.Union([Type.Literal("reference"), Type.Literal("edit_target")], {
+              description:
+                "'reference': use as style/content reference; 'edit_target': the image to be edited",
+            }),
+            description: Type.String({
+              description:
+                'How to use this image, e.g. "reference this image\'s style", "edit this image, keep the background unchanged"',
+            }),
+          }),
+          { description: "Reference/input images with their roles and usage descriptions" },
+        ),
+      ),
+      resolution: Type.Optional(
+        Type.Union([Type.Literal("1K"), Type.Literal("2K"), Type.Literal("4K")], {
+          description: "Output resolution: 1K (default), 2K, or 4K",
+        }),
+      ),
+    }),
+    async execute(
+      _toolCallId,
+      params: {
+        name: string;
+        prompt?: string;
+        prompt_file?: string;
+        reference_images?: Array<{
+          file_path: string;
+          role: "reference" | "edit_target";
+          description: string;
+        }>;
+        resolution?: "1K" | "2K" | "4K";
+      },
+    ) {
+      // Build prompt from file or inline
+      let prompt = params.prompt ?? "";
+      if (params.prompt_file) {
+        const promptFilePath = isAbsolute(params.prompt_file)
+          ? params.prompt_file
+          : resolve(params.prompt_file);
+        if (!existsSync(promptFilePath)) {
+          return {
+            content: [{ type: "text" as const, text: `Prompt file not found: ${promptFilePath}` }],
+            details: {},
+          };
+        }
+        prompt = readFileSync(promptFilePath, "utf-8").trim();
+      }
+
+      if (!prompt) {
+        return {
+          content: [
+            { type: "text" as const, text: "Either prompt or prompt_file must be provided." },
+          ],
+          details: {},
+        };
+      }
+
+      // Augment prompt with reference image descriptions
+      if (params.reference_images?.length) {
+        const descriptions = params.reference_images.map((img, i) => {
+          const roleLabel = img.role === "reference" ? "Reference image" : "Image to edit";
+          return `[Image ${i + 1} - ${roleLabel}]: ${img.description}`;
+        });
+        prompt = `${descriptions.join("\n")}\n\n${prompt}`;
+      }
+
+      // Build output path
+      let filename = params.name;
+      if (!/\.\w+$/.test(filename)) filename += ".png";
+      const outputPath = join(canvasDir, filename);
+
+      // Build command args
+      const args = ["run", "--quiet", GENERATE_IMAGE_SCRIPT, "--prompt", prompt, "--filename", outputPath];
+
+      if (params.resolution) {
+        args.push("--resolution", params.resolution);
+      }
+
+      if (params.reference_images) {
+        for (const img of params.reference_images) {
+          const imgPath = isAbsolute(img.file_path) ? img.file_path : resolve(img.file_path);
+          args.push("--input-image", imgPath);
+        }
+      }
+
+      // Execute the Python script
+      const proc = Bun.spawn(["uv", ...args], {
+        stdout: "pipe",
+        stderr: "pipe",
+        cwd: resolve("."),
+      });
+
+      const [stdout, stderr] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+
+      const exitCode = await proc.exited;
+
+      if (exitCode !== 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Image generation failed (exit code ${exitCode}):\n${stderr}\n${stdout}`,
+            },
+          ],
+          details: {},
+        };
+      }
+
+      // Read generated image and return as base64
+      if (!existsSync(outputPath)) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Image generation completed but output file not found at ${outputPath}\n${stdout}`,
+            },
+          ],
+          details: {},
+        };
+      }
+
+      const imageBuffer = readFileSync(outputPath);
+      const base64 = imageBuffer.toString("base64");
+      return {
+        content: [
+          { type: "text" as const, text: `Image saved to canvas/${filename}\n${stdout}` },
+          { type: "image" as const, data: base64, mimeType: "image/png" },
+        ],
+        details: { path: `canvas/${filename}` },
       };
     },
   };
