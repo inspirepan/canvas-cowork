@@ -1,8 +1,13 @@
+import { Loader2, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Button } from "@/components/ui/button";
-import { Loader2, Trash2 } from "lucide-react";
-import type { SessionInfo, Attachment, ModelInfo, ThinkingLevel } from "../../../shared/protocol.js";
+import type {
+  Attachment,
+  ModelInfo,
+  SessionInfo,
+  ThinkingLevel,
+} from "../../../shared/protocol.js";
 import { InputBox } from "./SessionChat.js";
 
 function formatRelativeTime(timestamp: number): string {
@@ -64,15 +69,14 @@ export function SessionList({
           ) : (
             sessions.map((session) => (
               <button
+                type="button"
                 key={session.id}
                 className="w-full text-left px-4 py-2.5 hover:bg-accent transition-colors flex items-center gap-2 group"
                 onClick={() => onSelectSession(session)}
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm truncate flex-1 text-foreground">
-                      {session.title}
-                    </span>
+                    <span className="text-sm truncate flex-1 text-foreground">{session.title}</span>
                     <span className="text-xs text-muted-foreground shrink-0">
                       {formatRelativeTime(session.modifiedAt)}
                     </span>

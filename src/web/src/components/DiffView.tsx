@@ -23,14 +23,16 @@ export function DiffView({ oldText, newText, fileName }: DiffViewProps) {
         lineDiffType: "word-alt",
       }}
       className="rounded-md overflow-hidden"
-      style={{
-        "--diffs-font-family": "ui-monospace, monospace",
-        "--diffs-font-size": "12px",
-        "--diffs-line-height": "20px",
-        "--diffs-tab-size": 2,
-        "--diffs-gap-block": 0,
-        "--diffs-min-number-column-width": "4ch",
-      } as React.CSSProperties}
+      style={
+        {
+          "--diffs-font-family": "ui-monospace, monospace",
+          "--diffs-font-size": "12px",
+          "--diffs-line-height": "20px",
+          "--diffs-tab-size": 2,
+          "--diffs-gap-block": 0,
+          "--diffs-min-number-column-width": "4ch",
+        } as React.CSSProperties
+      }
     />
   );
 }

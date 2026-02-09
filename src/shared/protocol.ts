@@ -22,13 +22,7 @@ export interface ModelInfo {
   reasoning: boolean;
 }
 
-export type ThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh";
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 // -- Serialized message types for transport --
 

@@ -1,8 +1,8 @@
-import { useState, useCallback, useRef } from "react";
-import { Editor } from "tldraw";
+import { PanelRightClose, PanelRightOpen } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
+import type { Editor } from "tldraw";
 import { AgentPanel } from "./components/AgentPanel.js";
 import { CanvasEditor } from "./components/CanvasEditor.js";
-import { PanelRightClose, PanelRightOpen } from "lucide-react";
 
 const PANEL_WIDTH = 380;
 
@@ -23,6 +23,7 @@ export function App() {
 
       {/* Panel toggle button - outside tldraw to avoid z-index conflicts */}
       <button
+        type="button"
         onClick={() => setPanelOpen((v) => !v)}
         className="fixed top-3 z-50 p-2 rounded-lg bg-background/80 backdrop-blur border border-border shadow-sm hover:bg-accent transition-all duration-300 ease-in-out"
         style={{ right: panelOpen ? PANEL_WIDTH + 12 : 12 }}
@@ -39,10 +40,7 @@ export function App() {
         className="h-full shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out"
         style={{ width: panelOpen ? PANEL_WIDTH : 0 }}
       >
-        <div
-          className="h-full bg-background border-l border-border"
-          style={{ width: PANEL_WIDTH }}
-        >
+        <div className="h-full bg-background border-l border-border" style={{ width: PANEL_WIDTH }}>
           <AgentPanel />
         </div>
       </div>

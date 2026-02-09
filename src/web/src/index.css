@@ -83,7 +83,9 @@
   border-color: var(--border);
 }
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
   overflow: hidden;
@@ -100,8 +102,8 @@ body {
 }
 
 [data-streamdown="code-block-body"] {
-  padding: 0.25rem 0.5rem !important;
-  margin: 0 !important;
+  padding: 0.25rem 0.5rem;
+  margin: 0;
 }
 
 *:where(:not(.tldraw-container, .tldraw-container *)) {
@@ -140,14 +142,14 @@ textarea::-webkit-scrollbar {
 }
 
 [data-streamdown="inline-code"] {
-  font-size: 0.9em !important;
-  font-weight: 400 !important;
-  color: var(--muted-foreground) !important;
+  font-size: 0.9em;
+  font-weight: 400;
+  color: var(--muted-foreground);
 }
 
 /* Move tldraw style panel to bottom-right */
 .tldraw-container .tlui-layout__top__right {
-  justify-content: flex-end !important;
+  justify-content: flex-end;
   padding-bottom: 12px;
   padding-right: 12px;
 }

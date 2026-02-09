@@ -1,4 +1,4 @@
-import { Tldraw, Editor } from "tldraw";
+import { type Editor, Tldraw } from "tldraw";
 import "tldraw/tldraw.css";
 
 interface CanvasEditorProps {

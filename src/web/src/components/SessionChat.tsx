@@ -1,30 +1,23 @@
-import { useState, useRef, useEffect, Fragment } from "react";
-import { DiffView } from "./DiffView";
-import { Button } from "@/components/ui/button";
+import { cjk } from "@streamdown/cjk";
+import { code } from "@streamdown/code";
+import { math } from "@streamdown/math";
 import {
+  Activity,
   ArrowLeft,
-  Square,
   ArrowUp,
+  Check,
   ChevronDown,
   ChevronRight,
-  Loader2,
-  Check,
-  X,
-  Activity,
-  Plus,
   ImageIcon,
+  Loader2,
+  Plus,
+  Square,
+  X,
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { Streamdown } from "streamdown";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Command,
   CommandEmpty,
@@ -34,27 +27,21 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import { Streamdown } from "streamdown";
-import { code } from "@streamdown/code";
-import { math } from "@streamdown/math";
-import { cjk } from "@streamdown/cjk";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import type { Attachment, ModelInfo, ThinkingLevel } from "../../../shared/protocol.js";
 import type {
   SessionState,
   UIAssistantMessage,
-  UIUserMessage,
-  UIToolCallBlock,
-  UIThinkingBlock,
   UIImageAttachment,
+  UIThinkingBlock,
+  UIToolCallBlock,
 } from "../hooks/use-agent.js";
-import type {
-  ModelInfo,
-  ThinkingLevel,
-  Attachment,
-} from "../../../shared/protocol.js";
+import { DiffView } from "./DiffView";
 
 // -- Tool Call Block --
 
@@ -72,6 +59,7 @@ function PiDiffView({ diff }: { diff: string }) {
           className = "text-muted-foreground";
         }
         return (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static diff lines
           <div key={i} className={className}>
             {line}
           </div>
@@ -82,23 +70,20 @@ function PiDiffView({ diff }: { diff: string }) {
 }
 
 function ToolArgItem({ name, value }: { name: string; value: unknown }) {
-  const valueStr =
-    typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  const valueStr = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   const isLong = valueStr.length > 200;
   const [expanded, setExpanded] = useState(!isLong);
 
-  const displayValue =
-    isLong && !expanded ? valueStr.slice(0, 200) + "..." : valueStr;
+  const displayValue = isLong && !expanded ? `${valueStr.slice(0, 200)}...` : valueStr;
 
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="font-normal text-green-700 dark:text-green-400">
-        {name}:
-      </span>
+      <span className="font-normal text-green-700 dark:text-green-400">{name}:</span>
       <span className="whitespace-pre-wrap break-words pl-3 border-l-2 border-border/80 ml-1">
         {displayValue}
         {isLong && (
           <button
+            type="button"
             onClick={() => setExpanded(!expanded)}
             className="ml-1 text-muted-foreground hover:text-foreground"
           >
@@ -120,6 +105,7 @@ function ToolArgsDisplay({ args }: { args: Record<string, unknown> }) {
   );
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: complex tool call rendering with many tool types
 function ToolCallView({ block }: { block: UIToolCallBlock }) {
   const args =
     block.arguments && typeof block.arguments === "object"
@@ -132,10 +118,7 @@ function ToolCallView({ block }: { block: UIToolCallBlock }) {
     typeof args.oldText === "string" &&
     typeof args.newText === "string";
 
-  const isWrite =
-    block.name === "write" &&
-    args &&
-    typeof args.content === "string";
+  const isWrite = block.name === "write" && args && typeof args.content === "string";
 
   const isDiffTool = !!(isEdit || isWrite);
 
@@ -150,16 +133,14 @@ function ToolCallView({ block }: { block: UIToolCallBlock }) {
   ) : null;
 
   const resultText = block.result?.content
-    ?.filter((c: any) => c.type === "text")
-    .map((c: any) => c.text)
+    ?.filter((c) => c.type === "text")
+    .map((c) => c.text ?? "")
     .join("");
 
-  const filePath =
-    args && typeof args.path === "string" ? args.path : undefined;
+  const filePath = args && typeof args.path === "string" ? args.path : undefined;
 
   const detailsDiff =
-    block.result?.details &&
-    typeof block.result.details.diff === "string"
+    block.result?.details && typeof block.result.details.diff === "string"
       ? block.result.details.diff
       : null;
 
@@ -177,17 +158,12 @@ function ToolCallView({ block }: { block: UIToolCallBlock }) {
       );
     }
     if (isWrite) {
-      return (
-        <DiffView
-          oldText=""
-          newText={String(args.content)}
-          fileName={filePath}
-        />
-      );
+      return <DiffView oldText="" newText={String(args.content)} fileName={filePath} />;
     }
     return null;
   };
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: tool summary with multiple tool-specific branches
   const toolSummary = (() => {
     if (!args) return null;
     if (block.name === "read" && typeof args.path === "string") {
@@ -203,7 +179,7 @@ function ToolCallView({ block }: { block: UIToolCallBlock }) {
     }
     if (block.name === "bash" && typeof args.command === "string") {
       const firstLine = args.command.split("\n")[0].trim();
-      return firstLine.length > 80 ? firstLine.slice(0, 80) + "..." : firstLine;
+      return firstLine.length > 80 ? `${firstLine.slice(0, 80)}...` : firstLine;
     }
     return null;
   })();
@@ -218,15 +194,9 @@ function ToolCallView({ block }: { block: UIToolCallBlock }) {
         )}
         <span className="font-mono shrink-0">{block.name}</span>
         {isDiffTool && filePath && (
-          <span className="font-mono truncate opacity-70">
-            {filePath}
-          </span>
+          <span className="font-mono truncate opacity-70">{filePath}</span>
         )}
-        {toolSummary && (
-          <span className="font-mono truncate opacity-50">
-            {toolSummary}
-          </span>
-        )}
+        {toolSummary && <span className="font-mono truncate opacity-50">{toolSummary}</span>}
         <span className="flex-1" />
         {statusIcon}
       </CollapsibleTrigger>
@@ -252,7 +222,7 @@ function ToolCallView({ block }: { block: UIToolCallBlock }) {
               }`}
             >
               {resultText.length > 2000
-                ? resultText.slice(0, 2000) + "\n... (truncated)"
+                ? `${resultText.slice(0, 2000)}\n... (truncated)`
                 : resultText}
             </pre>
           )}
@@ -276,11 +246,7 @@ function ThinkingView({ block }: { block: UIThinkingBlock }) {
           <Activity className="h-3 w-3" />
         )}
         <span>{block.isStreaming ? "Thinking..." : "Thought"}</span>
-        {open ? (
-          <ChevronDown className="h-3 w-3" />
-        ) : (
-          <ChevronRight className="h-3 w-3" />
-        )}
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="ml-4 my-1 text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed max-h-64 overflow-y-auto">
@@ -293,13 +259,7 @@ function ThinkingView({ block }: { block: UIThinkingBlock }) {
 
 // -- Message Rendering --
 
-function UserMessageView({
-  content,
-  images,
-}: {
-  content: string;
-  images?: UIImageAttachment[];
-}) {
+function UserMessageView({ content, images }: { content: string; images?: UIImageAttachment[] }) {
   return (
     <div className="flex justify-end px-4 py-2">
       <div className="bg-muted rounded-2xl rounded-br-md px-3.5 py-2 max-w-[85%] space-y-2">
@@ -307,6 +267,7 @@ function UserMessageView({
           <div className="flex flex-wrap gap-1.5">
             {images.map((img, i) => (
               <img
+                // biome-ignore lint/suspicious/noArrayIndexKey: images have no stable ID
                 key={i}
                 src={`data:${img.mimeType};base64,${img.data}`}
                 alt={img.name || "attachment"}
@@ -325,13 +286,14 @@ function AssistantMessageView({ message }: { message: UIAssistantMessage }) {
   return (
     <div className="px-4 py-2 flex flex-col gap-1">
       {message.content.map((block, i) => {
+        const key = block.type === "toolCall" ? block.id : `${block.type}-${i}`;
         switch (block.type) {
           case "thinking":
-            return <ThinkingView key={i} block={block} />;
+            return <ThinkingView key={key} block={block} />;
           case "text":
             return (
               <Streamdown
-                key={i}
+                key={key}
                 className="prose prose-sm prose-neutral max-w-none break-words [&>:first-child]:mt-0 [&>:last-child]:mb-0"
                 plugins={{ code, math, cjk }}
                 isAnimating={!!message.isStreaming}
@@ -340,7 +302,7 @@ function AssistantMessageView({ message }: { message: UIAssistantMessage }) {
               </Streamdown>
             );
           case "toolCall":
-            return <ToolCallView key={i} block={block} />;
+            return <ToolCallView key={key} block={block} />;
           default:
             return null;
         }
@@ -419,9 +381,7 @@ export function InputBox({
   }, [autoFocus]);
 
   const addFiles = async (files: FileList | File[]) => {
-    const imageFiles = Array.from(files).filter((f) =>
-      f.type.startsWith("image/"),
-    );
+    const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
     const chips = await Promise.all(imageFiles.map(fileToAttachment));
     setAttachments((prev) => [...prev, ...chips]);
   };
@@ -433,14 +393,15 @@ export function InputBox({
   const handleSubmit = () => {
     const trimmed = text.trim();
     if (!trimmed && attachments.length === 0) return;
-    const atts: Attachment[] | undefined = attachments.length
-      ? attachments.map((a) => ({
-          type: "image" as const,
-          data: a.data,
-          mimeType: a.mimeType,
-          name: a.name,
-        }))
-      : undefined;
+    const atts: Attachment[] | undefined =
+      attachments.length > 0
+        ? attachments.map((a) => ({
+            type: "image" as const,
+            data: a.data,
+            mimeType: a.mimeType,
+            name: a.name,
+          }))
+        : undefined;
     onSubmit(trimmed || "(image)", atts);
     setText("");
     setAttachments([]);
@@ -478,9 +439,9 @@ export function InputBox({
     const ta = textareaRef.current;
     if (ta) {
       ta.style.height = "auto";
-      ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+      ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
     }
-  }, [text]);
+  }, []);
 
   const thinkingLabels: Record<string, string> = {
     off: "Off",
@@ -506,6 +467,7 @@ export function InputBox({
               <ImageIcon className="h-3 w-3 text-muted-foreground shrink-0" />
               <span className="truncate max-w-[120px]">{a.name}</span>
               <button
+                type="button"
                 onClick={() => removeAttachment(a.id)}
                 className="text-muted-foreground hover:text-foreground"
               >
@@ -553,7 +515,11 @@ export function InputBox({
         {models && models.length > 0 && onModelChange && (
           <Popover open={modelOpen} onOpenChange={setModelOpen}>
             <PopoverTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs font-normal text-muted-foreground">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs font-normal text-muted-foreground"
+              >
                 {model ? `${model.name}` : "No model"}
                 <ChevronDown className="h-3 w-3 ml-1" />
               </Button>
@@ -587,40 +553,43 @@ export function InputBox({
           </Popover>
         )}
 
-        {availableThinkingLevels && availableThinkingLevels.length > 0 && thinkingLevel && onThinkingLevelChange && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs font-normal text-muted-foreground">
-                {thinkingLabels[thinkingLevel] || thinkingLevel}
-                <ChevronDown className="h-3 w-3 ml-1" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              {availableThinkingLevels.map((level) => (
-                <DropdownMenuItem
-                  key={level}
-                  onSelect={() => onThinkingLevelChange(level)}
-                  className="text-xs"
+        {availableThinkingLevels &&
+          availableThinkingLevels.length > 0 &&
+          thinkingLevel &&
+          onThinkingLevelChange && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs font-normal text-muted-foreground"
                 >
-                  {thinkingLabels[level] || level}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+                  {thinkingLabels[thinkingLevel] || thinkingLevel}
+                  <ChevronDown className="h-3 w-3 ml-1" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                {availableThinkingLevels.map((level) => (
+                  <DropdownMenuItem
+                    key={level}
+                    onSelect={() => onThinkingLevelChange(level)}
+                    className="text-xs"
+                  >
+                    {thinkingLabels[level] || level}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         <span className="flex-1" />
         <Button
           size="icon"
           variant={isStreaming ? "destructive" : "default"}
           className="h-8 w-8 shrink-0 rounded-full"
           onClick={isStreaming ? onAbort : handleSubmit}
-          disabled={!isStreaming && !hasContent}
+          disabled={!(isStreaming || hasContent)}
         >
-          {isStreaming ? (
-            <Square className="h-3 w-3" />
-          ) : (
-            <ArrowUp className="h-3.5 w-3.5" />
-          )}
+          {isStreaming ? <Square className="h-3 w-3" /> : <ArrowUp className="h-3.5 w-3.5" />}
         </Button>
       </div>
     </div>
@@ -669,7 +638,7 @@ export function SessionChat({
         el.scrollTop = el.scrollHeight;
       }
     }
-  }, [state.messages]);
+  }, []);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -678,37 +647,40 @@ export function SessionChat({
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <span className="text-sm font-medium truncate flex-1">
-          {state.info.title}
-        </span>
+        <span className="text-sm font-medium truncate flex-1">{state.info.title}</span>
         {state.info.isStreaming && (
           <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
         )}
       </div>
 
       {/* Messages - scrollable */}
-      <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto min-h-0">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto min-h-0"
+      >
         <div className="py-4">
           {state.messages.length === 0 ? (
             <div className="px-4 py-12 text-center">
-              <p className="text-sm text-muted-foreground">
-                Start a conversation
-              </p>
+              <p className="text-sm text-muted-foreground">Start a conversation</p>
             </div>
           ) : (
-            state.messages.map((msg, i) => {
+            state.messages.map((msg) => {
+              const msgKey = `${msg.role}-${msg.timestamp}`;
               if (msg.role === "user") {
-                return <UserMessageView key={i} content={msg.content} images={msg.images} />;
+                return <UserMessageView key={msgKey} content={msg.content} images={msg.images} />;
               }
-              const textBlocks = msg.content.filter(b => b.type !== "toolCall");
-              const toolBlocks = msg.content.filter(b => b.type === "toolCall") as UIToolCallBlock[];
+              const textBlocks = msg.content.filter((b) => b.type !== "toolCall");
+              const toolBlocks = msg.content.filter(
+                (b) => b.type === "toolCall",
+              ) as UIToolCallBlock[];
               return (
-                <Fragment key={i}>
+                <Fragment key={msgKey}>
                   {(textBlocks.length > 0 || msg.isStreaming) && (
                     <AssistantMessageView message={{ ...msg, content: textBlocks }} />
                   )}
-                  {toolBlocks.map((block, j) => (
-                    <div key={`tool-${j}`} className="px-4">
+                  {toolBlocks.map((block) => (
+                    <div key={block.id} className="px-4">
                       <ToolCallView block={block} />
                     </div>
                   ))}

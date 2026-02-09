@@ -1,7 +1,7 @@
-import { useAgent } from "../hooks/use-agent.js";
-import { SessionList } from "./SessionList.js";
-import { SessionChat } from "./SessionChat.js";
 import { Loader2 } from "lucide-react";
+import { useAgent } from "../hooks/use-agent.js";
+import { SessionChat } from "./SessionChat.js";
+import { SessionList } from "./SessionList.js";
 
 export function AgentPanel() {
   const agent = useAgent();
@@ -17,25 +17,20 @@ export function AgentPanel() {
     );
   }
 
-  const activeState = agent.activeSessionId
-    ? agent.sessionStates.get(agent.activeSessionId)
-    : null;
+  const activeState = agent.activeSessionId ? agent.sessionStates.get(agent.activeSessionId) : null;
 
   // Show session chat if we have an active session with state
   if (agent.activeSessionId && activeState) {
+    const sessionId = agent.activeSessionId;
     return (
       <SessionChat
         state={activeState}
         models={agent.models}
         onBack={() => agent.setActiveSessionId(null)}
-        onSendPrompt={(text, attachments) => agent.sendPrompt(agent.activeSessionId!, text, attachments)}
-        onAbort={() => agent.abort(agent.activeSessionId!)}
-        onModelChange={(provider, modelId) =>
-          agent.setModel(agent.activeSessionId!, provider, modelId)
-        }
-        onThinkingLevelChange={(level) =>
-          agent.setThinkingLevel(agent.activeSessionId!, level)
-        }
+        onSendPrompt={(text, attachments) => agent.sendPrompt(sessionId, text, attachments)}
+        onAbort={() => agent.abort(sessionId)}
+        onModelChange={(provider, modelId) => agent.setModel(sessionId, provider, modelId)}
+        onThinkingLevelChange={(level) => agent.setThinkingLevel(sessionId, level)}
       />
     );
   }

@@ -1,30 +1,26 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { getModel } from "@mariozechner/pi-ai";
 import {
-  createAgentSession,
-  SessionManager,
-  ModelRegistry,
-  AuthStorage,
   type AgentSession,
   type AgentSessionEvent,
+  AuthStorage,
+  createAgentSession,
+  ModelRegistry,
   type SessionInfo as PiSessionInfo,
+  SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { getModel } from "@mariozechner/pi-ai";
-import { join } from "path";
-import { homedir } from "os";
 import type {
-  SessionInfo,
-  ModelInfo,
-  ThinkingLevel,
-  SerializedMessage,
-  StreamDelta,
   Attachment,
+  ModelInfo,
+  SerializedMessage,
+  SessionInfo,
+  StreamDelta,
+  ThinkingLevel,
 } from "../shared/protocol.js";
 
 type EventHandler = (sessionId: string, delta: StreamDelta) => void;
-type SessionStateHandler = (
-  sessionId: string,
-  isStreaming: boolean,
-  title?: string,
-) => void;
+type SessionStateHandler = (sessionId: string, isStreaming: boolean, title?: string) => void;
 
 interface ManagedSession {
   session: AgentSession;
@@ -40,11 +36,7 @@ export class AgentManager {
   private onSessionStateChange: SessionStateHandler;
   private modelRegistry: ModelRegistry;
 
-  constructor(
-    cwd: string,
-    onStreamDelta: EventHandler,
-    onSessionStateChange: SessionStateHandler,
-  ) {
+  constructor(cwd: string, onStreamDelta: EventHandler, onSessionStateChange: SessionStateHandler) {
     this.cwd = cwd;
     this.onStreamDelta = onStreamDelta;
     this.onSessionStateChange = onSessionStateChange;
@@ -61,6 +53,7 @@ export class AgentManager {
   }> {
     const { session } = await createAgentSession({
       cwd: this.cwd,
+      // biome-ignore lint/suspicious/noExplicitAny: pi SDK model ID type is not exported
       model: getModel("openrouter", "anthropic/claude-opus-4.6" as any),
     });
 
@@ -80,14 +73,11 @@ export class AgentManager {
       info: this.toSessionInfo(sessionId, managed),
       model: this.getModelInfo(session),
       thinkingLevel: session.thinkingLevel as ThinkingLevel,
-      availableThinkingLevels:
-        session.getAvailableThinkingLevels() as ThinkingLevel[],
+      availableThinkingLevels: session.getAvailableThinkingLevels() as ThinkingLevel[],
     };
   }
 
-  async loadSession(
-    piSessionInfo: PiSessionInfo,
-  ): Promise<{
+  async loadSession(piSessionInfo: PiSessionInfo): Promise<{
     info: SessionInfo;
     messages: SerializedMessage[];
     model: ModelInfo | null;
@@ -102,8 +92,7 @@ export class AgentManager {
         messages: this.serializeMessages(existing.session),
         model: this.getModelInfo(existing.session),
         thinkingLevel: existing.session.thinkingLevel as ThinkingLevel,
-        availableThinkingLevels:
-          existing.session.getAvailableThinkingLevels() as ThinkingLevel[],
+        availableThinkingLevels: existing.session.getAvailableThinkingLevels() as ThinkingLevel[],
       };
     }
 
@@ -129,8 +118,7 @@ export class AgentManager {
       messages: this.serializeMessages(session),
       model: this.getModelInfo(session),
       thinkingLevel: session.thinkingLevel as ThinkingLevel,
-      availableThinkingLevels:
-        session.getAvailableThinkingLevels() as ThinkingLevel[],
+      availableThinkingLevels: session.getAvailableThinkingLevels() as ThinkingLevel[],
     };
   }
 
@@ -154,7 +142,7 @@ export class AgentManager {
     const piSessions = await SessionManager.list(this.cwd);
     const session = piSessions.find((s) => s.id === sessionId);
     if (session) {
-      const { unlink } = await import("fs/promises");
+      const { unlink } = await import("node:fs/promises");
       await unlink(session.path);
     }
   }
@@ -166,8 +154,7 @@ export class AgentManager {
       return {
         id: s.id,
         path: s.path,
-        title:
-          loaded?.title || s.firstMessage || "Empty conversation",
+        title: loaded?.title || s.firstMessage || "Empty conversation",
         createdAt: s.created.getTime(),
         modifiedAt: s.modified.getTime(),
         messageCount: s.messageCount,
@@ -177,11 +164,7 @@ export class AgentManager {
     });
   }
 
-  async prompt(
-    sessionId: string,
-    text: string,
-    attachments?: Attachment[],
-  ): Promise<void> {
+  async prompt(sessionId: string, text: string, attachments?: Attachment[]): Promise<void> {
     const managed = this.sessions.get(sessionId);
     if (!managed) throw new Error(`Session ${sessionId} not found`);
 
@@ -200,10 +183,8 @@ export class AgentManager {
       }));
 
     const opts = {
-      ...(images?.length ? { images } : {}),
-      ...(managed.session.isStreaming
-        ? { streamingBehavior: "followUp" as const }
-        : {}),
+      ...(images?.length > 0 ? { images } : {}),
+      ...(managed.session.isStreaming ? { streamingBehavior: "followUp" as const } : {}),
     };
 
     await managed.session.prompt(text, opts);
@@ -227,14 +208,16 @@ export class AgentManager {
     const managed = this.sessions.get(sessionId);
     if (!managed) throw new Error(`Session ${sessionId} not found`);
 
-    const model = getModel(provider as any, modelId as any);
-    await managed.session.setModel(model);
+    // biome-ignore lint/suspicious/noExplicitAny: pi SDK types not exported
+    const newModel = getModel(provider as any, modelId as any);
+    await managed.session.setModel(newModel);
 
+    const model = this.getModelInfo(managed.session);
+    if (!model) throw new Error("Model not available after setModel");
     return {
-      model: this.getModelInfo(managed.session)!,
+      model,
       thinkingLevel: managed.session.thinkingLevel as ThinkingLevel,
-      availableThinkingLevels:
-        managed.session.getAvailableThinkingLevels() as ThinkingLevel[],
+      availableThinkingLevels: managed.session.getAvailableThinkingLevels() as ThinkingLevel[],
     };
   }
 
@@ -265,10 +248,7 @@ export class AgentManager {
 
   // -- Private --
 
-  private subscribeToSession(
-    sessionId: string,
-    session: AgentSession,
-  ): () => void {
+  private subscribeToSession(sessionId: string, session: AgentSession): () => void {
     return session.subscribe((event: AgentSessionEvent) => {
       const delta = this.eventToDelta(event);
       if (delta) {
@@ -301,11 +281,7 @@ export class AgentManager {
 
       case "message_end": {
         const msg = event.message;
-        if (
-          msg.role === "user" ||
-          msg.role === "assistant" ||
-          msg.role === "toolResult"
-        ) {
+        if (msg.role === "user" || msg.role === "assistant" || msg.role === "toolResult") {
           return {
             type: "message_end",
             message: this.serializeMessage(msg) as SerializedMessage,
@@ -392,6 +368,7 @@ export class AgentManager {
       .filter((m): m is SerializedMessage => m !== null);
   }
 
+  // biome-ignore lint/suspicious/noExplicitAny: pi SDK message types not exported
   private serializeMessage(msg: any): SerializedMessage | null {
     switch (msg.role) {
       case "user":

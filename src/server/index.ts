@@ -1,17 +1,15 @@
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
+import type { ClientMessage, ServerMessage, StreamDelta } from "../shared/protocol.js";
 import { AgentManager } from "./agent-manager.js";
-import type {
-  ClientMessage,
-  ServerMessage,
-  StreamDelta,
-} from "../shared/protocol.js";
-import { readFileSync, existsSync } from "fs";
-import { join, resolve } from "path";
 
-const PORT = parseInt(process.env.PORT || "3000", 10);
+const PORT = Number.parseInt(process.env.PORT || "3000", 10);
 const cwd = process.env.CWD || process.cwd();
 
+type WS = Bun.ServerWebSocket<undefined>;
+
 // Track connected WebSocket clients
-const clients = new Set<any>();
+const clients = new Set<WS>();
 
 function broadcast(msg: ServerMessage) {
   const data = JSON.stringify(msg);
@@ -22,7 +20,7 @@ function broadcast(msg: ServerMessage) {
   }
 }
 
-function send(ws: any, msg: ServerMessage) {
+function send(ws: WS, msg: ServerMessage) {
   if (ws.readyState === 1) {
     ws.send(JSON.stringify(msg));
   }
@@ -38,7 +36,7 @@ const manager = new AgentManager(
   },
 );
 
-async function handleMessage(ws: any, raw: string) {
+async function handleMessage(ws: WS, raw: string) {
   let msg: ClientMessage;
   try {
     msg = JSON.parse(raw);
@@ -73,7 +71,9 @@ async function handleMessage(ws: any, raw: string) {
           break;
         }
         // Use the pi SessionInfo from listing
-        const piSessions = await (await import("@mariozechner/pi-coding-agent")).SessionManager.list(cwd);
+        const piSessions = await (
+          await import("@mariozechner/pi-coding-agent")
+        ).SessionManager.list(cwd);
         const piSession = piSessions.find((s) => s.id === msg.sessionId);
         if (!piSession) {
           send(ws, {
@@ -131,11 +131,7 @@ async function handleMessage(ws: any, raw: string) {
       }
 
       case "set_model": {
-        const result = await manager.setModel(
-          msg.sessionId,
-          msg.provider,
-          msg.modelId,
-        );
+        const result = await manager.setModel(msg.sessionId, msg.provider, msg.modelId);
         send(ws, {
           type: "model_changed",
           sessionId: msg.sessionId,
@@ -160,11 +156,11 @@ async function handleMessage(ws: any, raw: string) {
         break;
       }
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     send(ws, {
       type: "error",
-      sessionId: "sessionId" in msg ? (msg as any).sessionId : undefined,
-      message: err.message || "Unknown error",
+      sessionId: "sessionId" in msg ? (msg as { sessionId?: string }).sessionId : undefined,
+      message: err instanceof Error ? err.message : "Unknown error",
     });
   }
 }
@@ -200,7 +196,6 @@ const server = Bun.serve({
   websocket: {
     open(ws) {
       clients.add(ws);
-      console.log(`[ws] client connected (${clients.size} total)`);
     },
     message(ws, message) {
       const raw = typeof message === "string" ? message : message.toString();
@@ -208,18 +203,12 @@ const server = Bun.serve({
     },
     close(ws) {
       clients.delete(ws);
-      console.log(`[ws] client disconnected (${clients.size} total)`);
     },
   },
 });
 
-console.log(`[canvas-cowork] server running at http://localhost:${PORT}`);
-console.log(`[canvas-cowork] cwd: ${cwd}`);
-console.log(`[canvas-cowork] WebSocket: ws://localhost:${PORT}/ws`);
-
 // Graceful shutdown
 process.on("SIGINT", async () => {
-  console.log("\n[canvas-cowork] shutting down...");
   await manager.dispose();
   server.stop();
   process.exit(0);

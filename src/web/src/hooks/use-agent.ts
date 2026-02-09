@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  Attachment,
   ClientMessage,
+  ModelInfo,
+  SerializedMessage,
   ServerMessage,
   SessionInfo,
-  ModelInfo,
-  ThinkingLevel,
-  SerializedMessage,
   StreamDelta,
-  SerializedContentBlock,
-  Attachment,
+  ThinkingLevel,
 } from "../../../shared/protocol.js";
 
 // -- UI message types (extended from serialized for streaming state) --
@@ -96,6 +95,7 @@ export interface UseAgentReturn {
   fetchModels: () => void;
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: message serialization with multiple role/type branches
 function serializeToUIMessages(messages: SerializedMessage[]): UIMessage[] {
   const result: UIMessage[] = [];
   let currentAssistant: UIAssistantMessage | null = null;
@@ -138,12 +138,11 @@ function serializeToUIMessages(messages: SerializedMessage[]): UIMessage[] {
       // Attach tool result to the matching tool call in the last assistant message
       if (currentAssistant) {
         const toolCall = currentAssistant.content.find(
-          (b): b is UIToolCallBlock =>
-            b.type === "toolCall" && b.id === msg.toolCallId,
+          (b): b is UIToolCallBlock => b.type === "toolCall" && b.id === msg.toolCallId,
         );
         if (toolCall) {
           toolCall.result = {
-            content: msg.content as any,
+            content: msg.content as Array<{ type: string; text?: string; data?: string }>,
             isError: msg.isError,
             details: msg.details,
           };
@@ -159,16 +158,21 @@ export function useAgent(): UseAgentReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
-  const [sessionStates, setSessionStates] = useState<
-    Map<string, SessionState>
-  >(new Map());
+  const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [defaultModel, setDefaultModel] = useState<ModelInfo | null>(null);
   const [defaultThinkingLevel, setDefaultThinkingLevel] = useState<ThinkingLevel>("off");
-  const [defaultAvailableThinkingLevels, setDefaultAvailableThinkingLevels] = useState<ThinkingLevel[]>([]);
+  const [defaultAvailableThinkingLevels, setDefaultAvailableThinkingLevels] = useState<
+    ThinkingLevel[]
+  >([]);
 
-  const pendingPromptRef = useRef<{ text: string; attachments?: Attachment[]; model?: { provider: string; id: string }; thinkingLevel?: ThinkingLevel } | null>(null);
+  const pendingPromptRef = useRef<{
+    text: string;
+    attachments?: Attachment[];
+    model?: { provider: string; id: string };
+    thinkingLevel?: ThinkingLevel;
+  } | null>(null);
 
   const sendMsg = useCallback((msg: ClientMessage) => {
     const ws = wsRef.current;
@@ -177,12 +181,10 @@ export function useAgent(): UseAgentReturn {
     }
   }, []);
 
-  const getOrCreateAssistant = useCallback(
+  const _getOrCreateAssistant = useCallback(
     (
-      sessionId: string,
-      updater: (
-        prev: Map<string, SessionState>,
-      ) => Map<string, SessionState>,
+      _sessionId: string,
+      updater: (prev: Map<string, SessionState>) => Map<string, SessionState>,
     ) => {
       setSessionStates(updater);
     },
@@ -190,214 +192,217 @@ export function useAgent(): UseAgentReturn {
   );
 
   // Handle streaming deltas
-  const handleStreamDelta = useCallback(
-    (sessionId: string, delta: StreamDelta) => {
-      setSessionStates((prev) => {
-        const state = prev.get(sessionId);
-        if (!state) return prev;
+  const handleStreamDelta = useCallback((sessionId: string, delta: StreamDelta) => {
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: central state reducer for streaming deltas
+    setSessionStates((prev) => {
+      const state = prev.get(sessionId);
+      if (!state) return prev;
 
-        const next = new Map(prev);
-        const messages = [...state.messages];
-        const last = messages[messages.length - 1];
+      const next = new Map(prev);
+      const messages = [...state.messages];
+      const last = messages[messages.length - 1];
 
-        switch (delta.type) {
-          case "agent_start": {
-            // Mark session as streaming
-            const newInfo = { ...state.info, isStreaming: true };
-            next.set(sessionId, { ...state, info: newInfo, messages });
-            break;
+      switch (delta.type) {
+        case "agent_start": {
+          // Mark session as streaming
+          const newInfo = { ...state.info, isStreaming: true };
+          next.set(sessionId, { ...state, info: newInfo, messages });
+          break;
+        }
+
+        case "agent_end": {
+          const newInfo = { ...state.info, isStreaming: false };
+          // Clear isStreaming on last assistant message
+          if (last?.role === "assistant") {
+            const updated = { ...last, isStreaming: false };
+            // Also clear streaming on thinking blocks
+            updated.content = updated.content.map((b) =>
+              b.type === "thinking" ? { ...b, isStreaming: false } : b,
+            );
+            messages[messages.length - 1] = updated;
           }
+          next.set(sessionId, { ...state, info: newInfo, messages });
+          break;
+        }
 
-          case "agent_end": {
-            const newInfo = { ...state.info, isStreaming: false };
-            // Clear isStreaming on last assistant message
-            if (last?.role === "assistant") {
-              const updated = { ...last, isStreaming: false };
-              // Also clear streaming on thinking blocks
-              updated.content = updated.content.map((b) =>
-                b.type === "thinking" ? { ...b, isStreaming: false } : b,
-              );
-              messages[messages.length - 1] = updated;
+        case "message_start": {
+          if (delta.role === "assistant") {
+            messages.push({
+              role: "assistant",
+              content: [],
+              model: "",
+              isStreaming: true,
+              timestamp: Date.now(),
+            });
+          }
+          next.set(sessionId, { ...state, messages });
+          break;
+        }
+
+        case "text_delta": {
+          if (last?.role === "assistant") {
+            const content = [...last.content];
+            const lastBlock = content[content.length - 1];
+            if (lastBlock?.type === "text") {
+              content[content.length - 1] = {
+                ...lastBlock,
+                text: lastBlock.text + delta.delta,
+              };
+            } else {
+              content.push({ type: "text", text: delta.delta });
             }
-            next.set(sessionId, { ...state, info: newInfo, messages });
-            break;
+            messages[messages.length - 1] = { ...last, content };
           }
+          next.set(sessionId, { ...state, messages });
+          break;
+        }
 
-          case "message_start": {
-            if (delta.role === "assistant") {
-              messages.push({
-                role: "assistant",
-                content: [],
-                model: "",
-                isStreaming: true,
-                timestamp: Date.now(),
-              });
-            }
-            next.set(sessionId, { ...state, messages });
-            break;
-          }
-
-          case "text_delta": {
-            if (last?.role === "assistant") {
-              const content = [...last.content];
-              const lastBlock = content[content.length - 1];
-              if (lastBlock?.type === "text") {
-                content[content.length - 1] = {
-                  ...lastBlock,
-                  text: lastBlock.text + delta.delta,
-                };
-              } else {
-                content.push({ type: "text", text: delta.delta });
-              }
-              messages[messages.length - 1] = { ...last, content };
-            }
-            next.set(sessionId, { ...state, messages });
-            break;
-          }
-
-          case "thinking_delta": {
-            if (last?.role === "assistant") {
-              const content = [...last.content];
-              const lastBlock = content[content.length - 1];
-              if (lastBlock?.type === "thinking" && lastBlock.isStreaming) {
-                content[content.length - 1] = {
-                  ...lastBlock,
-                  thinking: lastBlock.thinking + delta.delta,
-                };
-              } else {
-                content.push({
-                  type: "thinking",
-                  thinking: delta.delta,
-                  isStreaming: true,
-                });
-              }
-              messages[messages.length - 1] = { ...last, content };
-            }
-            next.set(sessionId, { ...state, messages });
-            break;
-          }
-
-          case "toolcall_start": {
-            // Nothing to do yet, wait for toolcall_end
-            break;
-          }
-
-          case "toolcall_end": {
-            if (last?.role === "assistant") {
-              const content = [...last.content];
+        case "thinking_delta": {
+          if (last?.role === "assistant") {
+            const content = [...last.content];
+            const lastBlock = content[content.length - 1];
+            if (lastBlock?.type === "thinking" && lastBlock.isStreaming) {
+              content[content.length - 1] = {
+                ...lastBlock,
+                thinking: lastBlock.thinking + delta.delta,
+              };
+            } else {
               content.push({
-                type: "toolCall",
-                id: delta.toolCallId,
-                name: delta.toolName,
-                arguments: delta.args,
-                isExecuting: false,
+                type: "thinking",
+                thinking: delta.delta,
+                isStreaming: true,
               });
+            }
+            messages[messages.length - 1] = { ...last, content };
+          }
+          next.set(sessionId, { ...state, messages });
+          break;
+        }
+
+        case "toolcall_start": {
+          // Nothing to do yet, wait for toolcall_end
+          break;
+        }
+
+        case "toolcall_end": {
+          if (last?.role === "assistant") {
+            const content = [...last.content];
+            content.push({
+              type: "toolCall",
+              id: delta.toolCallId,
+              name: delta.toolName,
+              arguments: delta.args,
+              isExecuting: false,
+            });
+            messages[messages.length - 1] = { ...last, content };
+          }
+          next.set(sessionId, { ...state, messages });
+          break;
+        }
+
+        case "tool_exec_start": {
+          if (last?.role === "assistant") {
+            const content = [...last.content];
+            const tc = content.find(
+              (b): b is UIToolCallBlock => b.type === "toolCall" && b.id === delta.toolCallId,
+            );
+            if (tc) {
+              const idx = content.indexOf(tc);
+              content[idx] = { ...tc, isExecuting: true };
               messages[messages.length - 1] = { ...last, content };
             }
-            next.set(sessionId, { ...state, messages });
-            break;
           }
+          next.set(sessionId, { ...state, messages });
+          break;
+        }
 
-          case "tool_exec_start": {
-            if (last?.role === "assistant") {
-              const content = [...last.content];
-              const tc = content.find(
-                (b): b is UIToolCallBlock =>
-                  b.type === "toolCall" && b.id === delta.toolCallId,
-              );
-              if (tc) {
-                const idx = content.indexOf(tc);
-                content[idx] = { ...tc, isExecuting: true };
-                messages[messages.length - 1] = { ...last, content };
-              }
+        case "tool_exec_end": {
+          if (last?.role === "assistant") {
+            const content = [...last.content];
+            const tc = content.find(
+              (b): b is UIToolCallBlock => b.type === "toolCall" && b.id === delta.toolCallId,
+            );
+            if (tc) {
+              const idx = content.indexOf(tc);
+              content[idx] = {
+                ...tc,
+                isExecuting: false,
+                result: {
+                  content: delta.result.content as Array<{
+                    type: string;
+                    text?: string;
+                    data?: string;
+                  }>,
+                  isError: delta.isError,
+                  details: delta.result.details,
+                },
+              };
+              messages[messages.length - 1] = { ...last, content };
             }
-            next.set(sessionId, { ...state, messages });
-            break;
           }
+          next.set(sessionId, { ...state, messages });
+          break;
+        }
 
-          case "tool_exec_end": {
-            if (last?.role === "assistant") {
-              const content = [...last.content];
-              const tc = content.find(
-                (b): b is UIToolCallBlock =>
-                  b.type === "toolCall" && b.id === delta.toolCallId,
-              );
-              if (tc) {
-                const idx = content.indexOf(tc);
-                content[idx] = {
-                  ...tc,
-                  isExecuting: false,
-                  result: {
-                    content: delta.result.content as any,
-                    isError: delta.isError,
-                    details: delta.result.details,
-                  },
-                };
-                messages[messages.length - 1] = { ...last, content };
-              }
-            }
-            next.set(sessionId, { ...state, messages });
-            break;
-          }
-
-          case "message_end": {
-            // Replace streamed assistant message with final version
-            if (delta.message.role === "assistant" && last?.role === "assistant") {
-              const finalMsg = serializeToUIMessages([delta.message])[0];
-              if (finalMsg) {
-                // Preserve tool results that were attached during streaming
-                if (finalMsg.role === "assistant") {
-                  for (const block of last.content) {
-                    if (block.type === "toolCall" && block.result) {
-                      const match = finalMsg.content.find(
-                        (b): b is UIToolCallBlock =>
-                          b.type === "toolCall" && b.id === block.id,
-                      );
-                      if (match) {
-                        match.result = block.result;
-                      }
+        case "message_end": {
+          // Replace streamed assistant message with final version
+          if (delta.message.role === "assistant" && last?.role === "assistant") {
+            const finalMsg = serializeToUIMessages([delta.message])[0];
+            if (finalMsg) {
+              // Preserve tool results that were attached during streaming
+              if (finalMsg.role === "assistant") {
+                for (const block of last.content) {
+                  if (block.type === "toolCall" && block.result) {
+                    const match = finalMsg.content.find(
+                      (b): b is UIToolCallBlock => b.type === "toolCall" && b.id === block.id,
+                    );
+                    if (match) {
+                      match.result = block.result;
                     }
                   }
                 }
-                messages[messages.length - 1] = finalMsg;
               }
-            } else if (delta.message.role === "toolResult" && last?.role === "assistant") {
-              // Attach tool result to matching tool call
-              const toolResult = delta.message;
-              const content = [...last.content];
-              const tc = content.find(
-                (b): b is UIToolCallBlock =>
-                  b.type === "toolCall" && b.id === toolResult.toolCallId,
-              );
-              if (tc) {
-                const idx = content.indexOf(tc);
-                content[idx] = {
-                  ...tc,
-                  isExecuting: false,
-                  result: {
-                    content: toolResult.content as any,
-                    isError: toolResult.isError,
-                    details: toolResult.details,
-                  },
-                };
-                messages[messages.length - 1] = { ...last, content };
-              }
-            } else if (delta.message.role === "user") {
-              // User message finalized - already added via sendPrompt
+              messages[messages.length - 1] = finalMsg;
             }
-            next.set(sessionId, { ...state, messages });
-            break;
+          } else if (delta.message.role === "toolResult" && last?.role === "assistant") {
+            // Attach tool result to matching tool call
+            const toolResult = delta.message;
+            const content = [...last.content];
+            const tc = content.find(
+              (b): b is UIToolCallBlock => b.type === "toolCall" && b.id === toolResult.toolCallId,
+            );
+            if (tc) {
+              const idx = content.indexOf(tc);
+              content[idx] = {
+                ...tc,
+                isExecuting: false,
+                result: {
+                  content: toolResult.content as Array<{
+                    type: string;
+                    text?: string;
+                    data?: string;
+                  }>,
+                  isError: toolResult.isError,
+                  details: toolResult.details,
+                },
+              };
+              messages[messages.length - 1] = { ...last, content };
+            }
+          } else if (delta.message.role === "user") {
+            // User message finalized - already added via sendPrompt
           }
+          next.set(sessionId, { ...state, messages });
+          break;
         }
+      }
 
-        return next;
-      });
-    },
-    [],
-  );
+      return next;
+    });
+  }, []);
 
   // Handle server messages
   const handleServerMessage = useCallback(
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: central message dispatcher
     (msg: ServerMessage) => {
       switch (msg.type) {
         case "sessions_list":
@@ -415,7 +420,7 @@ export function useAgent(): UseAgentReturn {
             initialMessages.push({
               role: "user",
               content: pending.text,
-              ...(images?.length ? { images } : {}),
+              ...(images?.length > 0 ? { images } : {}),
               timestamp: Date.now(),
             });
           }
@@ -440,16 +445,25 @@ export function useAgent(): UseAgentReturn {
           if (pending) {
             // Apply model/thinkingLevel preferences if user changed them before creating
             if (pending.model) {
-              sendMsg({ type: "set_model", sessionId: msg.session.id, provider: pending.model.provider, modelId: pending.model.id });
+              sendMsg({
+                type: "set_model",
+                sessionId: msg.session.id,
+                provider: pending.model.provider,
+                modelId: pending.model.id,
+              });
             }
             if (pending.thinkingLevel && pending.thinkingLevel !== msg.thinkingLevel) {
-              sendMsg({ type: "set_thinking_level", sessionId: msg.session.id, level: pending.thinkingLevel });
+              sendMsg({
+                type: "set_thinking_level",
+                sessionId: msg.session.id,
+                level: pending.thinkingLevel,
+              });
             }
             sendMsg({
               type: "prompt",
               sessionId: msg.session.id,
               text: pending.text,
-              ...(pending.attachments?.length ? { attachments: pending.attachments } : {}),
+              ...(pending.attachments?.length > 0 ? { attachments: pending.attachments } : {}),
             });
           }
           break;
@@ -463,11 +477,7 @@ export function useAgent(): UseAgentReturn {
           setDefaultAvailableThinkingLevels(msg.availableThinkingLevels);
 
           setSessions((prev) =>
-            prev.map((s) =>
-              s.id === msg.session.id
-                ? { ...msg.session, isLoaded: true }
-                : s,
-            ),
+            prev.map((s) => (s.id === msg.session.id ? { ...msg.session, isLoaded: true } : s)),
           );
           setSessionStates((prev) => {
             const next = new Map(prev);
@@ -491,9 +501,7 @@ export function useAgent(): UseAgentReturn {
             return next;
           });
           setSessions((prev) =>
-            prev.map((s) =>
-              s.id === msg.sessionId ? { ...s, isLoaded: false } : s,
-            ),
+            prev.map((s) => (s.id === msg.sessionId ? { ...s, isLoaded: false } : s)),
           );
           break;
 
@@ -504,7 +512,7 @@ export function useAgent(): UseAgentReturn {
             return next;
           });
           setSessions((prev) => prev.filter((s) => s.id !== msg.sessionId));
-          setActiveSessionId((prev) => prev === msg.sessionId ? null : prev);
+          setActiveSessionId((prev) => (prev === msg.sessionId ? null : prev));
           break;
 
         case "stream_delta":
@@ -571,18 +579,21 @@ export function useAgent(): UseAgentReturn {
           setModels(msg.models);
           setDefaultModel((prev) => {
             if (prev) return prev;
-            return msg.models.find(
-              (m) => m.provider === "openrouter" && m.id === "anthropic/claude-opus-4.6",
-            ) || msg.models[0] || null;
+            return (
+              msg.models.find(
+                (m) => m.provider === "openrouter" && m.id === "anthropic/claude-opus-4.6",
+              ) ||
+              msg.models[0] ||
+              null
+            );
           });
           break;
 
         case "error":
-          console.error(`[ws error]`, msg.message, msg.sessionId);
           break;
       }
     },
-    [handleStreamDelta],
+    [handleStreamDelta, sendMsg],
   );
 
   // WebSocket connection
@@ -602,8 +613,8 @@ export function useAgent(): UseAgentReturn {
       try {
         const msg: ServerMessage = JSON.parse(e.data);
         handleServerMessage(msg);
-      } catch (err) {
-        console.error("[ws] failed to parse message", err);
+      } catch {
+        // ignore malformed messages
       }
     };
 
@@ -614,7 +625,7 @@ export function useAgent(): UseAgentReturn {
     return () => {
       ws.close();
     };
-  }, []);
+  }, [handleServerMessage, sendMsg]);
 
   const createSession = useCallback(() => {
     sendMsg({ type: "create_session" });
@@ -675,7 +686,7 @@ export function useAgent(): UseAgentReturn {
             {
               role: "user" as const,
               content: text,
-              ...(images?.length ? { images } : {}),
+              ...(images?.length > 0 ? { images } : {}),
               timestamp: Date.now(),
             },
           ],
@@ -686,7 +697,7 @@ export function useAgent(): UseAgentReturn {
         type: "prompt",
         sessionId,
         text,
-        ...(attachments?.length ? { attachments } : {}),
+        ...(attachments?.length > 0 ? { attachments } : {}),
       });
     },
     [sendMsg],
