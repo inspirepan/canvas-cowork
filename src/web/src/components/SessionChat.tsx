@@ -285,7 +285,12 @@ function ThinkingView({ block }: { block: UIThinkingBlock }) {
 
 // -- Message Rendering --
 
+function stripCanvasAttachmentPrefix(content: string): string {
+  return content.replace(/^<system>\n[\s\S]*?\n<\/system>\n\n/, "");
+}
+
 function UserMessageView({ content, images }: { content: string; images?: UIImageAttachment[] }) {
+  const displayContent = stripCanvasAttachmentPrefix(content);
   return (
     <div className="flex justify-end px-4 py-2">
       <div className="bg-blue-50 dark:bg-blue-950/30 text-slate-600 dark:text-slate-300 rounded-2xl rounded-br-md px-3.5 py-2 max-w-[85%] space-y-2">
@@ -302,7 +307,7 @@ function UserMessageView({ content, images }: { content: string; images?: UIImag
             ))}
           </div>
         )}
-        <p className="prose prose-sm whitespace-pre-wrap">{content}</p>
+        <p className="prose prose-sm whitespace-pre-wrap">{displayContent}</p>
       </div>
     </div>
   );

@@ -58,7 +58,7 @@ export function SessionList({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 pt-4 pb-3">
+      <div className="shrink-0 flex items-center justify-between px-4 pt-4 pb-3">
         <h2 className="text-sm font-medium text-foreground">Tasks</h2>
         <Button
           variant="ghost"
@@ -70,10 +70,10 @@ export function SessionList({
         </Button>
       </div>
 
-      <Separator />
+      <Separator className="shrink-0" />
 
       {/* Session list */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1 min-h-0">
         <div className="py-1">
           {sessions.length === 0 ? (
             <div className="px-4 py-12 text-center">

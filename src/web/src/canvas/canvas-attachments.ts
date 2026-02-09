@@ -66,7 +66,7 @@ export async function buildMessageWithAttachments(
 
   const header = `User attached ${canvasAttachments.length} item(s) from canvas:\n\n`;
   const docs = canvasAttachments.map((a) => formatAttachment(a)).join("\n\n");
-  const text = `${header}${docs}\n\n---\n${userMessage}`;
+  const text = `<system>\n${header}${docs}\n</system>\n\n${userMessage}`;
   return { text, imageAttachments };
 }
 
