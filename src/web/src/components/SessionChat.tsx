@@ -289,12 +289,83 @@ function stripCanvasAttachmentPrefix(content: string): string {
   return content.replace(/^<system>\n[\s\S]*?\n<\/system>\n\n/, "");
 }
 
+interface AttachmentMeta {
+  type: "text" | "image" | "frame";
+  name: string;
+  path: string;
+}
+
+function parseCanvasAttachmentMeta(content: string): AttachmentMeta[] {
+  const match = content.match(/^<system>\n[\s\S]*?\n<\/system>/);
+  if (!match) return [];
+  const block = match[0];
+  const results: AttachmentMeta[] = [];
+  const folderPaths: string[] = [];
+
+  for (const m of block.matchAll(/<folder path="canvas\/([^"]+)\/">/g)) {
+    folderPaths.push(`${m[1]}/`);
+    results.push({ type: "frame", name: m[1].split("/").pop() || m[1], path: m[1] });
+  }
+  for (const m of block.matchAll(/<image path="canvas\/([^"]+)">/g)) {
+    const path = m[1];
+    if (folderPaths.some((fp) => path.startsWith(fp))) continue;
+    results.push({ type: "image", name: path.split("/").pop() || path, path });
+  }
+  for (const m of block.matchAll(/<doc path="canvas\/([^"]+)">/g)) {
+    const path = m[1];
+    if (folderPaths.some((fp) => path.startsWith(fp))) continue;
+    results.push({ type: "text", name: path.split("/").pop() || path, path });
+  }
+  return results;
+}
+
 function UserMessageView({ content, images }: { content: string; images?: UIImageAttachment[] }) {
   const displayContent = stripCanvasAttachmentPrefix(content);
+  const attachmentMeta = parseCanvasAttachmentMeta(content);
+  const imagesByName = new Map(
+    images?.filter((img) => img.name).map((img) => [img.name, img]) ?? [],
+  );
+
   return (
     <div className="flex justify-end px-4 py-2">
       <div className="bg-blue-50 dark:bg-blue-950/30 text-slate-600 dark:text-slate-300 rounded-2xl rounded-br-md px-3.5 py-2 max-w-[85%] space-y-2">
-        {images && images.length > 0 && (
+        {attachmentMeta.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {attachmentMeta.map((meta) => {
+              if (meta.type === "image") {
+                const img = imagesByName.get(meta.name);
+                if (img) {
+                  return (
+                    <div
+                      key={meta.path}
+                      className="relative overflow-hidden rounded-md border border-blue-200 dark:border-blue-800"
+                    >
+                      <img
+                        src={`data:${img.mimeType};base64,${img.data}`}
+                        alt={meta.name}
+                        className="h-14 max-w-[100px] object-cover"
+                      />
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/50 to-transparent px-1 pb-0.5 pt-2">
+                        <span className="text-[10px] text-white truncate block leading-tight">
+                          {meta.name}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                }
+              }
+              return (
+                <div
+                  key={meta.path}
+                  className="flex items-center gap-1 border border-blue-200 dark:border-blue-800 rounded-md px-1.5 py-0.5 text-xs"
+                >
+                  <CanvasTypeIcon type={meta.type} />
+                  <span className="truncate max-w-[100px]">{meta.name}</span>
+                </div>
+              );
+            })}
+          </div>
+        ) : images && images.length > 0 ? (
           <div className="flex flex-wrap gap-1.5">
             {images.map((img, i) => (
               <img
@@ -306,7 +377,7 @@ function UserMessageView({ content, images }: { content: string; images?: UIImag
               />
             ))}
           </div>
-        )}
+        ) : null}
         <p className="prose prose-sm whitespace-pre-wrap">{displayContent}</p>
       </div>
     </div>

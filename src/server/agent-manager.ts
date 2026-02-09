@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import sharp from "sharp";
 import { getModel } from "@mariozechner/pi-ai";
 import {
   type AgentSession,
@@ -39,6 +40,25 @@ interface ManagedSession {
 
 // Threshold for auto-saving long messages/prompts to files
 const PROMPT_FILE_THRESHOLD = 200;
+
+// Claude API limit: 5MB per image. Use 4.5MB as threshold to leave margin.
+const IMAGE_MAX_BYTES = 4.5 * 1024 * 1024;
+const IMAGE_MAX_DIMENSION = 512;
+const IMAGE_JPEG_QUALITY = 85;
+
+async function ensureImageUnderLimit(
+  base64: string,
+  mimeType: string,
+): Promise<{ data: string; mimeType: string }> {
+  const buf = Buffer.from(base64, "base64");
+  if (buf.length <= IMAGE_MAX_BYTES) return { data: base64, mimeType };
+
+  const resized = await sharp(buf)
+    .resize(IMAGE_MAX_DIMENSION, IMAGE_MAX_DIMENSION, { fit: "inside" })
+    .jpeg({ quality: IMAGE_JPEG_QUALITY })
+    .toBuffer();
+  return { data: resized.toString("base64"), mimeType: "image/jpeg" };
+}
 
 export class AgentManager {
   private sessions = new Map<string, ManagedSession>();
@@ -207,7 +227,9 @@ export class AgentManager {
     let promptText = text;
     const attachmentSeparator = "\n\n---\n";
     const sepIndex = text.indexOf(attachmentSeparator);
-    const userMessage = sepIndex >= 0 ? text.slice(sepIndex + attachmentSeparator.length) : text;
+    const rawUserMessage = sepIndex >= 0 ? text.slice(sepIndex + attachmentSeparator.length) : text;
+    // Strip <system> tags so they don't get persisted to prompt files
+    const userMessage = rawUserMessage.replace(/<system>[\s\S]*?<\/system>/g, "").trim();
     if (this.canvasDir && userMessage.length > PROMPT_FILE_THRESHOLD) {
       const savedPath = this.savePromptFile(userMessage);
       if (savedPath) {
@@ -215,14 +237,16 @@ export class AgentManager {
       }
     }
 
-    // Convert attachments to pi SDK ImageContent
-    const images = attachments
-      ?.filter((a) => a.type === "image")
-      .map((a) => ({
-        type: "image" as const,
-        data: a.data,
-        mimeType: a.mimeType,
-      }));
+    // Convert attachments to pi SDK ImageContent, enforcing size limit
+    const rawImages = attachments?.filter((a) => a.type === "image") ?? [];
+    const images = rawImages.length > 0
+      ? await Promise.all(
+          rawImages.map(async (a) => {
+            const { data, mimeType } = await ensureImageUnderLimit(a.data, a.mimeType);
+            return { type: "image" as const, data, mimeType };
+          }),
+        )
+      : undefined;
 
     const opts = {
       ...((images?.length ?? 0) > 0 ? { images } : {}),
