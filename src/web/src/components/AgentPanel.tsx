@@ -13,6 +13,7 @@ export interface CanvasContext {
     name: string;
   }[];
   resolveCanvasItem: (shapeId: string, path: string) => CanvasAttachment | null;
+  addImageToCanvas: (base64: string, mimeType: string) => Promise<CanvasAttachment | null>;
 }
 
 export function AgentPanel({

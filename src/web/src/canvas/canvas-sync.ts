@@ -139,6 +139,92 @@ export class CanvasSync {
     return items;
   }
 
+  // Add an image from base64 data: upload to server, create asset + shape.
+  // Returns shapeId and path for the caller to reference.
+  async addImageFromBase64(
+    base64: string,
+    mimeType: string,
+  ): Promise<{ shapeId: string; path: string }> {
+    const ext =
+      { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif" }[
+        mimeType
+      ] ?? "png";
+    const now = new Date();
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mi = String(now.getMinutes()).padStart(2, "0");
+    const ss = String(now.getSeconds()).padStart(2, "0");
+    const fileName = `paste-${mm}${dd}-${hh}${mi}${ss}.${ext}`;
+
+    // Decode base64 and upload to server
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: mimeType });
+    const file = new File([blob], fileName, { type: mimeType });
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("fileName", fileName);
+    const res = await fetch("/canvas/upload", { method: "POST", body: formData });
+    if (!res.ok) throw new Error("Upload failed");
+    const { src } = (await res.json()) as { src: string };
+    const path = src.slice("/canvas/".length);
+
+    // Get image dimensions from data URL
+    const { w, h } = await loadImageDimensions(`data:${mimeType};base64,${base64}`);
+    const maxDim = 600;
+    let displayW = w;
+    let displayH = h;
+    if (w > maxDim || h > maxDim) {
+      const scale = maxDim / Math.max(w, h);
+      displayW = Math.round(w * scale);
+      displayH = Math.round(h * scale);
+    }
+
+    const assetId = AssetRecordType.createId();
+    const shapeId = createShapeId();
+    const pos = this.findOpenPosition();
+
+    this.applyRemote(() => {
+      this.editor.createAssets([
+        AssetRecordType.create({
+          id: assetId,
+          type: "image",
+          props: {
+            w,
+            h,
+            name: path.split("/").pop() ?? path,
+            isAnimated: mimeType === "image/gif",
+            mimeType,
+            src,
+          },
+        }),
+      ]);
+      this.editor.createShape({
+        id: shapeId,
+        type: "image",
+        x: pos.x,
+        y: pos.y,
+        opacity: 0,
+        props: { w: displayW, h: displayH, assetId: assetId as TLAssetId },
+      });
+    });
+
+    requestAnimationFrame(() => {
+      this.editor.animateShapes(
+        [{ id: shapeId, type: "image" as const, opacity: 1 as const }],
+        { animation: { duration: FADE_IN_DURATION } },
+      );
+    });
+
+    this.shapeToFile.set(shapeId, path);
+    this.fileToShape.set(path, shapeId);
+    this.scheduleSave();
+
+    return { shapeId, path };
+  }
+
   // Wrap shape mutations in mergeRemoteChanges so the store listener
   // (source: 'user') ignores them, preventing canvas->FS->canvas loops.
   private applyRemote(fn: () => void): void {

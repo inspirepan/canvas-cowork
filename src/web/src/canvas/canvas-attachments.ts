@@ -1,4 +1,5 @@
 import type { Attachment } from "../../../shared/protocol.js";
+import { resizeImageBase64 } from "../lib/utils.js";
 
 export interface CanvasAttachment {
   shapeId: string;
@@ -26,18 +27,17 @@ function formatAttachment(a: CanvasAttachment): string {
 }
 
 // Build the message text with <doc> wrappers and extract image attachments
-export function buildMessageWithAttachments(
+export async function buildMessageWithAttachments(
   userMessage: string,
   canvasAttachments: CanvasAttachment[],
-): { text: string; imageAttachments: Attachment[] } {
-  const imageAttachments: Attachment[] = [];
+): Promise<{ text: string; imageAttachments: Attachment[] }> {
+  const rawImages: { data: string; mimeType: string; name: string }[] = [];
 
   // Collect image attachments (including from frame children)
   function collectImages(attachments: CanvasAttachment[]) {
     for (const a of attachments) {
       if (a.type === "image" && a.imageData) {
-        imageAttachments.push({
-          type: "image",
+        rawImages.push({
           data: a.imageData,
           mimeType: a.imageMimeType ?? "image/png",
           name: a.name,
@@ -47,6 +47,18 @@ export function buildMessageWithAttachments(
     }
   }
   collectImages(canvasAttachments);
+
+  const imageAttachments: Attachment[] = await Promise.all(
+    rawImages.map(async (img) => {
+      const resized = await resizeImageBase64(img.data, img.mimeType);
+      return {
+        type: "image" as const,
+        data: resized.data,
+        mimeType: resized.mimeType,
+        name: img.name,
+      };
+    }),
+  );
 
   if (canvasAttachments.length === 0) {
     return { text: userMessage, imageAttachments };

@@ -150,9 +150,27 @@ export function App() {
     [editor],
   );
 
+  const addImageToCanvas = useCallback(
+    async (base64: string, mimeType: string) => {
+      const s = syncRef.current;
+      if (!s) return null;
+      const { shapeId, path } = await s.addImageFromBase64(base64, mimeType);
+      const name = path.split("/").pop() ?? path;
+      return {
+        shapeId,
+        path,
+        type: "image" as const,
+        name,
+        imageData: base64,
+        imageMimeType: mimeType,
+      };
+    },
+    [],
+  );
+
   const canvasContext = useMemo(
-    () => ({ selectionAttachments, getCanvasItems, resolveCanvasItem }),
-    [selectionAttachments, getCanvasItems, resolveCanvasItem],
+    () => ({ selectionAttachments, getCanvasItems, resolveCanvasItem, addImageToCanvas }),
+    [selectionAttachments, getCanvasItems, resolveCanvasItem, addImageToCanvas],
   );
 
   return (

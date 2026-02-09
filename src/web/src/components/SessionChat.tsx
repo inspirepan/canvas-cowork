@@ -48,6 +48,7 @@ import type {
   UIThinkingBlock,
   UIToolCallBlock,
 } from "../hooks/use-agent.js";
+import { resizeImageBase64 } from "../lib/utils.js";
 import type { CanvasContext } from "./AgentPanel.js";
 import { DiffView } from "./DiffView";
 
@@ -347,32 +348,6 @@ function AssistantMessageView({ message }: { message: UIAssistantMessage }) {
 
 // -- Input Box --
 
-// -- Attachment chip in input --
-
-interface AttachmentChip {
-  id: string;
-  name: string;
-  data: string;
-  mimeType: string;
-}
-
-function fileToAttachment(file: File): Promise<AttachmentChip> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = (reader.result as string).split(",")[1];
-      resolve({
-        id: crypto.randomUUID(),
-        name: file.name,
-        data: base64,
-        mimeType: file.type || "image/png",
-      });
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
 // Regex for whitespace detection (used in @ mention trigger)
 const WHITESPACE_RE = /\s/;
 
@@ -477,7 +452,6 @@ export function InputBox({
   canvasContext,
 }: InputBoxProps) {
   const [text, setText] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentChip[]>([]);
   const [modelOpen, setModelOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -513,13 +487,23 @@ export function InputBox({
   }, [autoFocus]);
 
   const addFiles = async (files: FileList | File[]) => {
+    if (!canvasContext) return;
     const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
-    const chips = await Promise.all(imageFiles.map(fileToAttachment));
-    setAttachments((prev) => [...prev, ...chips]);
-  };
-
-  const removeAttachment = (id: string) => {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    for (const file of imageFiles) {
+      const raw = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const base64 = raw.split(",")[1];
+      const mimeType = file.type || "image/png";
+      const resized = await resizeImageBase64(base64, mimeType);
+      const attachment = await canvasContext.addImageToCanvas(resized.data, resized.mimeType);
+      if (attachment && !mentionAttachments.some((a) => a.path === attachment.path)) {
+        setMentionAttachments((prev) => [...prev, attachment]);
+      }
+    }
   };
 
   const dismissSelectionChip = (shapeId: string) => {
@@ -563,38 +547,29 @@ export function InputBox({
     textareaRef.current?.focus();
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const trimmed = text.trim();
-
-    // Collect image file attachments
-    const fileAtts: Attachment[] = attachments.map((a) => ({
-      type: "image" as const,
-      data: a.data,
-      mimeType: a.mimeType,
-      name: a.name,
-    }));
 
     // Collect canvas attachments (selection + mentions, deduplicated)
     const canvasAtts = deduplicateAttachments(effectiveSelectionChips, mentionAttachments);
 
-    if (!trimmed && fileAtts.length === 0 && canvasAtts.length === 0) return;
+    if (!trimmed && canvasAtts.length === 0) return;
 
     // Build enriched message with canvas context
     let finalText = trimmed || "(attachment)";
-    let allAtts = [...fileAtts];
+    let allAtts: Attachment[] = [];
 
     if (canvasAtts.length > 0) {
-      const { text: enrichedText, imageAttachments } = buildMessageWithAttachments(
+      const { text: enrichedText, imageAttachments } = await buildMessageWithAttachments(
         finalText,
         canvasAtts,
       );
       finalText = enrichedText;
-      allAtts = [...allAtts, ...imageAttachments];
+      allAtts = imageAttachments;
     }
 
     onSubmit(finalText, allAtts.length > 0 ? allAtts : undefined);
     setText("");
-    setAttachments([]);
     setMentionAttachments([]);
     setMentionQuery(null);
     if (textareaRef.current) {
@@ -703,7 +678,7 @@ export function InputBox({
   };
 
   const hasCanvasChips = effectiveSelectionChips.length > 0 || mentionAttachments.length > 0;
-  const hasContent = text.trim() || attachments.length > 0 || hasCanvasChips;
+  const hasContent = text.trim() || hasCanvasChips;
 
   return (
     <form
@@ -729,28 +704,6 @@ export function InputBox({
               variant="mention"
               onDismiss={() => removeMentionChip(a.shapeId)}
             />
-          ))}
-        </div>
-      )}
-
-      {/* Image file attachment chips */}
-      {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {attachments.map((a) => (
-            <div
-              key={a.id}
-              className="flex items-center gap-1.5 bg-background border rounded-lg px-2 py-1 text-xs"
-            >
-              <ImageIcon className="h-3 w-3 text-muted-foreground shrink-0" />
-              <span className="truncate max-w-[120px]">{a.name}</span>
-              <button
-                type="button"
-                onClick={() => removeAttachment(a.id)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
           ))}
         </div>
       )}
