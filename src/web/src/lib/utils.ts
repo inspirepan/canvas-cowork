@@ -5,20 +5,15 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-const MAX_DIMENSION = 2048;
-const MAX_BASE64_BYTES = 4 * 1024 * 1024; // 4MB (API limit is 5MB)
+const MAX_DIMENSION = 512;
 const JPEG_QUALITY = 0.85;
 
-// Resize a base64 image to fit within MAX_DIMENSION and MAX_BASE64_BYTES.
-// Returns { data, mimeType } with the (possibly resized) result.
+// Always resize/compress a base64 image before sending to the model.
+// Scales down to fit within MAX_DIMENSION and converts to JPEG.
 export function resizeImageBase64(
   base64: string,
   mimeType: string,
 ): Promise<{ data: string; mimeType: string }> {
-  if (base64.length <= MAX_BASE64_BYTES) {
-    return Promise.resolve({ data: base64, mimeType });
-  }
-
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
@@ -36,15 +31,7 @@ export function resizeImageBase64(
       ctx.drawImage(img, 0, 0, width, height);
 
       const outMime = "image/jpeg";
-      let quality = JPEG_QUALITY;
-      let result = canvas.toDataURL(outMime, quality).split(",")[1];
-
-      // Reduce quality further if still too large
-      while (result.length > MAX_BASE64_BYTES && quality > 0.3) {
-        quality -= 0.1;
-        result = canvas.toDataURL(outMime, quality).split(",")[1];
-      }
-
+      const result = canvas.toDataURL(outMime, JPEG_QUALITY).split(",")[1];
       resolve({ data: result, mimeType: outMime });
     };
     img.onerror = () => resolve({ data: base64, mimeType });
