@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { ClientMessage, ServerMessage, StreamDelta } from "../shared/protocol.js";
 import { AgentManager } from "./agent-manager.js";
+import { CanvasFS } from "./canvas-fs.js";
 
 const PORT = Number.parseInt(process.env.PORT || "3000", 10);
 const cwd = process.env.CWD || process.cwd();
@@ -25,6 +26,12 @@ function send(ws: WS, msg: ServerMessage) {
     ws.send(JSON.stringify(msg));
   }
 }
+
+// Initialize CanvasFS: auto-create canvas/ and start file watcher
+const canvasFS = new CanvasFS(cwd);
+canvasFS.start((event) => {
+  broadcast({ type: "canvas_fs_change", changes: [event] });
+});
 
 const manager = new AgentManager(
   cwd,
@@ -155,6 +162,56 @@ async function handleMessage(ws: WS, raw: string) {
         send(ws, { type: "models_list", models });
         break;
       }
+
+      case "canvas_init": {
+        const snapshot = canvasFS.readCanvasJson();
+        const files = canvasFS.scanDirectory();
+        send(ws, {
+          type: "canvas_state",
+          snapshot: snapshot?.tldraw ?? null,
+          shapeToFile: snapshot?.shapeToFile ?? {},
+          files,
+        });
+        break;
+      }
+
+      case "canvas_sync": {
+        for (const change of msg.changes) {
+          switch (change.action) {
+            case "create":
+              if (change.shapeType === "frame") {
+                canvasFS.createDirectory(change.path);
+              } else if (change.shapeType === "named_text") {
+                canvasFS.writeTextFile(change.path, change.content ?? "");
+              }
+              break;
+            case "update":
+              if (change.shapeType === "named_text") {
+                canvasFS.writeTextFile(change.path, change.content ?? "");
+              }
+              break;
+            case "delete":
+              canvasFS.deleteFile(change.path);
+              break;
+            case "move":
+            case "rename":
+              if (change.oldPath) {
+                canvasFS.renameFile(change.oldPath, change.path);
+              }
+              break;
+          }
+        }
+        break;
+      }
+
+      case "canvas_save": {
+        canvasFS.writeCanvasJson({
+          version: 1,
+          tldraw: msg.snapshot,
+          shapeToFile: msg.shapeToFile,
+        });
+        break;
+      }
     }
   } catch (err: unknown) {
     send(ws, {
@@ -178,6 +235,49 @@ const server = Bun.serve({
       const success = server.upgrade(req);
       if (success) return undefined;
       return new Response("WebSocket upgrade failed", { status: 400 });
+    }
+
+    // Serve canvas/ files at /canvas/*
+    if (url.pathname.startsWith("/canvas/")) {
+      // POST /canvas/upload - image upload from tldraw
+      if (url.pathname === "/canvas/upload" && req.method === "POST") {
+        try {
+          const formData = await req.formData();
+          const file = formData.get("file") as File | null;
+          const fileName = formData.get("fileName") as string | null;
+          if (!(file && fileName)) {
+            return new Response("Missing file or fileName", { status: 400 });
+          }
+          const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+          // Deduplicate: image-0209-143022.png -> image-0209-143022-1.png, -2, ...
+          const dotIdx = safeName.lastIndexOf(".");
+          const base = dotIdx > 0 ? safeName.slice(0, dotIdx) : safeName;
+          const ext = dotIdx > 0 ? safeName.slice(dotIdx) : "";
+          let finalName = `${base}-1${ext}`;
+          let seq = 1;
+          while (existsSync(join(canvasFS.canvasDir, finalName))) {
+            seq++;
+            finalName = `${base}-${seq}${ext}`;
+          }
+          const buffer = await file.arrayBuffer();
+          canvasFS.writeBinaryFile(finalName, Buffer.from(buffer));
+          return Response.json({ src: `/canvas/${finalName}` });
+        } catch (_err) {
+          return new Response("Upload failed", { status: 500 });
+        }
+      }
+
+      // GET /canvas/* - serve canvas files
+      const relPath = decodeURIComponent(url.pathname.slice("/canvas/".length));
+      if (relPath.includes("..")) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      const canvasFilePath = join(canvasFS.canvasDir, relPath);
+      if (existsSync(canvasFilePath)) {
+        const file = Bun.file(canvasFilePath);
+        return new Response(file);
+      }
+      return new Response("Not found", { status: 404 });
     }
 
     // Serve static files
@@ -209,6 +309,7 @@ const server = Bun.serve({
 
 // Graceful shutdown
 process.on("SIGINT", async () => {
+  canvasFS.stop();
   await manager.dispose();
   server.stop();
   process.exit(0);

@@ -147,6 +147,11 @@ textarea::-webkit-scrollbar {
   color: var(--muted-foreground);
 }
 
+/* Transparent frame background */
+.tldraw-container .tl-frame__body {
+  fill: transparent;
+}
+
 /* Move tldraw style panel to bottom-right */
 .tldraw-container .tlui-layout__top__right {
   justify-content: flex-end;

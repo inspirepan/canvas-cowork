@@ -129,6 +129,35 @@ export interface ImageAttachment {
 // Future: canvas snapshot, file reference, etc.
 export type Attachment = ImageAttachment;
 
+// -- Canvas FS types --
+
+export type CanvasShapeType = "named_text" | "image" | "frame";
+
+// Server -> Client: filesystem changed
+export interface CanvasFSEvent {
+  action: "created" | "modified" | "deleted";
+  path: string; // relative to canvas/
+  isDirectory: boolean;
+  timestamp: number;
+  content?: string; // text file content (for created/modified .txt files)
+}
+
+// Canvas state file entry (for initial sync)
+export interface CanvasFileEntry {
+  path: string;
+  type: CanvasShapeType | "directory";
+  content?: string; // text file content
+}
+
+// Client -> Server: canvas changed, update filesystem
+export interface CanvasSyncChange {
+  action: "create" | "update" | "delete" | "move" | "rename";
+  shapeType: CanvasShapeType;
+  path: string; // relative to canvas/
+  content?: string;
+  oldPath?: string; // for move/rename
+}
+
 // -- Client -> Server messages --
 
 export type ClientMessage =
@@ -155,7 +184,14 @@ export type ClientMessage =
       sessionId: string;
       level: ThinkingLevel;
     }
-  | { type: "get_models" };
+  | { type: "get_models" }
+  | { type: "canvas_sync"; changes: CanvasSyncChange[] }
+  | { type: "canvas_init" }
+  | {
+      type: "canvas_save";
+      snapshot: Record<string, unknown>;
+      shapeToFile: Record<string, string>;
+    };
 
 // -- Server -> Client messages --
 
@@ -198,4 +234,11 @@ export type ServerMessage =
       thinkingLevel: ThinkingLevel;
     }
   | { type: "models_list"; models: ModelInfo[] }
+  | { type: "canvas_fs_change"; changes: CanvasFSEvent[] }
+  | {
+      type: "canvas_state";
+      snapshot: Record<string, unknown> | null;
+      shapeToFile: Record<string, string>;
+      files: CanvasFileEntry[];
+    }
   | { type: "error"; sessionId?: string; message: string };

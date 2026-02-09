@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   Attachment,
+  CanvasFileEntry,
+  CanvasFSEvent,
   ClientMessage,
   ModelInfo,
   SerializedMessage,
@@ -69,6 +71,12 @@ export interface SessionState {
   availableThinkingLevels: ThinkingLevel[];
 }
 
+export interface CanvasInitialState {
+  snapshot: Record<string, unknown> | null;
+  shapeToFile: Record<string, string>;
+  files: CanvasFileEntry[];
+}
+
 export interface UseAgentReturn {
   connected: boolean;
   sessions: SessionInfo[];
@@ -93,6 +101,11 @@ export interface UseAgentReturn {
   setDefaultModel: (model: ModelInfo) => void;
   setDefaultThinkingLevel: (level: ThinkingLevel) => void;
   fetchModels: () => void;
+
+  // Canvas sync
+  sendMsg: (msg: ClientMessage) => void;
+  canvasState: CanvasInitialState | null;
+  onCanvasFSChange: React.MutableRefObject<((changes: CanvasFSEvent[]) => void) | null>;
 }
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: message serialization with multiple role/type branches
@@ -166,6 +179,9 @@ export function useAgent(): UseAgentReturn {
   const [defaultAvailableThinkingLevels, setDefaultAvailableThinkingLevels] = useState<
     ThinkingLevel[]
   >([]);
+
+  const [canvasState, setCanvasState] = useState<CanvasInitialState | null>(null);
+  const canvasFSChangeRef = useRef<((changes: CanvasFSEvent[]) => void) | null>(null);
 
   const pendingPromptRef = useRef<{
     text: string;
@@ -420,7 +436,7 @@ export function useAgent(): UseAgentReturn {
             initialMessages.push({
               role: "user",
               content: pending.text,
-              ...(images?.length > 0 ? { images } : {}),
+              ...((images?.length ?? 0) > 0 ? { images } : {}),
               timestamp: Date.now(),
             });
           }
@@ -463,7 +479,9 @@ export function useAgent(): UseAgentReturn {
               type: "prompt",
               sessionId: msg.session.id,
               text: pending.text,
-              ...(pending.attachments?.length > 0 ? { attachments: pending.attachments } : {}),
+              ...((pending.attachments?.length ?? 0) > 0
+                ? { attachments: pending.attachments }
+                : {}),
             });
           }
           break;
@@ -589,6 +607,18 @@ export function useAgent(): UseAgentReturn {
           });
           break;
 
+        case "canvas_fs_change":
+          canvasFSChangeRef.current?.(msg.changes);
+          break;
+
+        case "canvas_state":
+          setCanvasState({
+            snapshot: msg.snapshot,
+            shapeToFile: msg.shapeToFile,
+            files: msg.files,
+          });
+          break;
+
         case "error":
           break;
       }
@@ -607,6 +637,7 @@ export function useAgent(): UseAgentReturn {
       setConnected(true);
       sendMsg({ type: "list_sessions" });
       sendMsg({ type: "get_models" });
+      sendMsg({ type: "canvas_init" });
     };
 
     ws.onmessage = (e) => {
@@ -686,7 +717,7 @@ export function useAgent(): UseAgentReturn {
             {
               role: "user" as const,
               content: text,
-              ...(images?.length > 0 ? { images } : {}),
+              ...((images?.length ?? 0) > 0 ? { images } : {}),
               timestamp: Date.now(),
             },
           ],
@@ -697,7 +728,7 @@ export function useAgent(): UseAgentReturn {
         type: "prompt",
         sessionId,
         text,
-        ...(attachments?.length > 0 ? { attachments } : {}),
+        ...((attachments?.length ?? 0) > 0 ? { attachments } : {}),
       });
     },
     [sendMsg],
@@ -751,5 +782,10 @@ export function useAgent(): UseAgentReturn {
     setDefaultModel,
     setDefaultThinkingLevel,
     fetchModels,
+
+    // Canvas sync
+    sendMsg,
+    canvasState,
+    onCanvasFSChange: canvasFSChangeRef,
   };
 }

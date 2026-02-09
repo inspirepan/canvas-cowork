@@ -1,18 +1,44 @@
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Editor } from "tldraw";
+import { CanvasSync } from "./canvas/canvas-sync.js";
 import { AgentPanel } from "./components/AgentPanel.js";
 import { CanvasEditor } from "./components/CanvasEditor.js";
+import { useAgent } from "./hooks/use-agent.js";
 
 const PANEL_WIDTH = 380;
 
 export function App() {
   const [panelOpen, setPanelOpen] = useState(true);
-  const editorRef = useRef<Editor | null>(null);
+  const [editor, setEditor] = useState<Editor | null>(null);
+  const syncRef = useRef<CanvasSync | null>(null);
+  const agent = useAgent();
 
-  const handleMount = useCallback((editor: Editor) => {
-    editorRef.current = editor;
+  const handleMount = useCallback((ed: Editor) => {
+    setEditor(ed);
   }, []);
+
+  // Initialize canvas sync when editor is ready and canvas state arrives
+  useEffect(() => {
+    if (!(editor && agent.canvasState)) return;
+    // Only init once
+    if (syncRef.current) return;
+
+    const sync = new CanvasSync(editor, agent.sendMsg);
+    sync.init(agent.canvasState.snapshot, agent.canvasState.shapeToFile, agent.canvasState.files);
+    syncRef.current = sync;
+
+    // Wire up FS change handler
+    agent.onCanvasFSChange.current = (changes) => {
+      sync.handleFSChanges(changes);
+    };
+
+    return () => {
+      sync.dispose();
+      syncRef.current = null;
+      agent.onCanvasFSChange.current = null;
+    };
+  }, [editor, agent.canvasState, agent.sendMsg, agent.onCanvasFSChange]);
 
   return (
     <div className="h-screen w-screen overflow-hidden flex relative">
@@ -41,7 +67,7 @@ export function App() {
         style={{ width: panelOpen ? PANEL_WIDTH : 0 }}
       >
         <div className="h-full bg-background border-l border-border" style={{ width: PANEL_WIDTH }}>
-          <AgentPanel />
+          <AgentPanel agent={agent} />
         </div>
       </div>
     </div>

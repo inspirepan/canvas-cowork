@@ -8,28 +8,28 @@
 
 ## Current State
 
-Phase 1 (Agent Panel) is complete:
+Phase 1 (TLDraw Integration) and Phase 2 (CanvasFS Core) are complete.
 
 - **Backend**: Bun HTTP/WS server + `AgentManager` wrapping `@mariozechner/pi-coding-agent` SDK
-- **Protocol**: Full WebSocket bidirectional protocol (stream delta, session lifecycle)
-- **Frontend**: `AgentPanel` component (SessionList + SessionChat) with `useAgent` hook
-- **App.tsx**: Renders a standalone 380px AgentPanel in a centered container. No canvas.
+- **Protocol**: Full WebSocket bidirectional protocol (stream delta, session lifecycle, canvas FS events)
+- **Frontend**: `CanvasEditor` (tldraw full-screen) + floating `AgentPanel` sidebar (380px, toggleable)
+- **CanvasFS**: `canvas/` auto-created on startup, recursive file watcher with 300ms debounce, `.canvas.json` read/write, file-to-shape mapping rules
+- **New protocol types**: `canvas_fs_change` (server->client), `canvas_sync` (client->server), `CanvasFSEvent`, `CanvasSyncChange`
 
 What does NOT exist yet:
 
-- No tldraw dependency or canvas rendering
-- No `canvas/` directory concept
-- No custom tools or system prompt customization
-- No file-to-canvas mapping or bidirectional sync
+- No custom shapes (NamedText) or tool restriction
+- No bidirectional sync (canvas <-> filesystem)
+- No agent custom tools or system prompt customization
 
 ---
 
 ## Phases Overview
 
 ```
-Phase 1: TLDraw Integration + Layout
-Phase 2: CanvasFS Core (directory, file watcher, .canvas.json)
-Phase 3: Custom Shapes + Tool Restriction (NamedText, Frame rules)
+Phase 1: TLDraw Integration + Layout                              [DONE]
+Phase 2: CanvasFS Core (directory, file watcher, .canvas.json)     [DONE]
+Phase 3: Custom Shapes + Tool Restriction (NamedText, Frame rules) [DONE]
 Phase 4: Bidirectional Sync (canvas <-> filesystem)
 Phase 5: Agent Tools + System Prompt (canvas_snapshot, screenshot)
 Phase 6: Frontend Polish (auto-layout, frame resize, smooth transitions)
@@ -571,13 +571,13 @@ src/
 6. When panel is collapsed, canvas should have no obstructed areas
 
 **Tasks**:
-- [ ] Install tldraw dependency (`bun add tldraw`)
-- [ ] Create `CanvasEditor.tsx` component wrapping `<Tldraw>`
-- [ ] Refactor `App.tsx` to full-screen canvas + floating AgentPanel
-- [ ] Style AgentPanel as floating sidebar (absolute positioned, right side)
-- [ ] Add panel toggle button
-- [ ] Verify: canvas pan/zoom works, panel does not intercept canvas events
-- [ ] Verify: agent chat unaffected (create session, send message, streaming reply, tool call display)
+- [x] Install tldraw dependency (`bun add tldraw`)
+- [x] Create `CanvasEditor.tsx` component wrapping `<Tldraw>`
+- [x] Refactor `App.tsx` to full-screen canvas + floating AgentPanel
+- [x] Style AgentPanel as floating sidebar (absolute positioned, right side)
+- [x] Add panel toggle button
+- [x] Verify: canvas pan/zoom works, panel does not intercept canvas events
+- [x] Verify: agent chat unaffected (create session, send message, streaming reply, tool call display)
 
 ---
 
@@ -596,14 +596,14 @@ src/
 8. In browser DevTools Network WS panel, new canvas message types compile and are defined correctly
 
 **Tasks**:
-- [ ] Auto-create `canvas/` directory on server startup
-- [ ] Create `canvas-fs.ts` with `CanvasFS` class skeleton (constructor, start/stop)
-- [ ] Implement file-to-shape mapping rule interface (txt -> named_text, png/jpg -> image, dir -> frame)
-- [ ] Implement `.canvas.json` read/write methods (serialize/deserialize)
-- [ ] Implement recursive file watcher on `canvas/` with 300ms debounce
-- [ ] File watcher outputs structured logs (type, path, timestamp)
-- [ ] Add `canvas_fs_change` and `canvas_sync` message types to `protocol.ts`
-- [ ] Confirm TypeScript compiles with no type errors
+- [x] Auto-create `canvas/` directory on server startup
+- [x] Create `canvas-fs.ts` with `CanvasFS` class skeleton (constructor, start/stop)
+- [x] Implement file-to-shape mapping rule interface (txt -> named_text, png/jpg -> image, dir -> frame)
+- [x] Implement `.canvas.json` read/write methods (serialize/deserialize)
+- [x] Implement recursive file watcher on `canvas/` with 300ms debounce
+- [x] File watcher outputs structured logs (type, path, timestamp)
+- [x] Add `canvas_fs_change` and `canvas_sync` message types to `protocol.ts`
+- [x] Confirm TypeScript compiles with no type errors
 
 ---
 
@@ -623,14 +623,14 @@ src/
 9. Default text shape unavailable: confirm no native Text tool in toolbar (replaced by NamedText)
 
 **Tasks**:
-- [ ] Create `NamedTextShapeUtil`: render name label + text content, extend appropriate base class
-- [ ] Create `NamedTextTool`: toolbar icon and interaction (click canvas to create shape)
-- [ ] Implement NamedText double-click text editing
-- [ ] Implement NamedText name editing interaction
-- [ ] Implement NamedText auto-height from text content
-- [ ] Configure tool restriction: pass `tools` and `shapeUtils` to `<Tldraw>`
-- [ ] Custom toolbar UI: only show the 8 allowed tools
-- [ ] Extend `FrameShapeUtil`: override `canReceiveNewChildrenOfType` to prevent frame nesting
+- [x] Create `NamedTextShapeUtil`: render name label + text content, extend appropriate base class
+- [x] Create `NamedTextTool`: toolbar icon and interaction (click canvas to create shape)
+- [x] Implement NamedText double-click text editing
+- [x] Implement NamedText name editing interaction
+- [x] Implement NamedText auto-height from text content
+- [x] Configure tool restriction: pass `tools` and `shapeUtils` to `<Tldraw>`
+- [x] Custom toolbar UI: only show the 8 allowed tools
+- [x] Extend `FrameShapeUtil`: override `canReceiveNewChildrenOfType` to prevent frame nesting
 - [ ] Verify: frame nesting is blocked
 - [ ] Verify: NamedText can be created, edited, dragged between frames
 

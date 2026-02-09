@@ -18,6 +18,9 @@ export default defineConfig({
         target: "ws://localhost:3000",
         ws: true,
       },
+      "/canvas": {
+        target: "http://localhost:3000",
+      },
     },
   },
   build: {

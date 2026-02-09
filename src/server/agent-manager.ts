@@ -183,7 +183,7 @@ export class AgentManager {
       }));
 
     const opts = {
-      ...(images?.length > 0 ? { images } : {}),
+      ...((images?.length ?? 0) > 0 ? { images } : {}),
       ...(managed.session.isStreaming ? { streamingBehavior: "followUp" as const } : {}),
     };
 

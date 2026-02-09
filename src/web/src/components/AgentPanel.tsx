@@ -1,11 +1,9 @@
 import { Loader2 } from "lucide-react";
-import { useAgent } from "../hooks/use-agent.js";
+import type { UseAgentReturn } from "../hooks/use-agent.js";
 import { SessionChat } from "./SessionChat.js";
 import { SessionList } from "./SessionList.js";
 
-export function AgentPanel() {
-  const agent = useAgent();
-
+export function AgentPanel({ agent }: { agent: UseAgentReturn }) {
   if (!agent.connected) {
     return (
       <div className="flex items-center justify-center h-full">
