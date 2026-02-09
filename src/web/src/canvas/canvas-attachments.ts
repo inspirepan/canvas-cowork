@@ -13,15 +13,16 @@ export interface CanvasAttachment {
 }
 
 function formatAttachment(a: CanvasAttachment): string {
+  const path = `canvas/${a.path}`;
   if (a.type === "frame") {
     const children =
       a.children?.map((c) => formatAttachment(c)).join("\n") ?? "";
-    return `<folder path="${a.path}/">\n${children}\n</folder>`;
+    return `<folder path="${path}/">\n${children}\n</folder>`;
   }
   if (a.type === "image") {
-    return `<image path="${a.path}">[image attached]</image>`;
+    return `<image path="${path}">[image attached]</image>`;
   }
-  return `<doc path="${a.path}">\n${a.content ?? ""}\n</doc>`;
+  return `<doc path="${path}">\n${a.content ?? ""}\n</doc>`;
 }
 
 // Build the message text with <doc> wrappers and extract image attachments

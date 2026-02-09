@@ -6,7 +6,6 @@ import {
   Rectangle2d,
   ShapeUtil,
   T,
-  type TLResizeInfo,
   type TLShape,
   type TLShapeId,
   toDomPrecision,
@@ -35,32 +34,44 @@ export type NamedTextShape = TLShape<"named_text">;
 const PADDING = 12;
 const NAME_HEIGHT = 24;
 const MIN_WIDTH = 120;
+const MAX_WIDTH = 2000;
 const MIN_HEIGHT = 40;
 const FONT_SIZE = 14;
 const LINE_HEIGHT = 1.5;
 const FONT_FAMILY = "Inter, ui-sans-serif, system-ui, -apple-system, sans-serif";
 
-// Compute text size for auto-height
+const TEXT_OPTS_BASE = {
+  fontFamily: FONT_FAMILY,
+  fontSize: FONT_SIZE,
+  lineHeight: LINE_HEIGHT,
+  fontWeight: "normal" as const,
+  fontStyle: "normal" as const,
+  padding: "0px",
+};
+
 function measureNamedText(editor: Editor, shape: NamedTextShape) {
-  const { text, w } = shape.props;
-  const contentWidth = w - PADDING * 2;
+  const { text } = shape.props;
 
   if (!text) {
-    return { width: w, height: MIN_HEIGHT };
+    return { width: MIN_WIDTH, height: MIN_HEIGHT };
   }
 
-  const result = editor.textMeasure.measureText(text, {
-    fontFamily: FONT_FAMILY,
-    fontSize: FONT_SIZE,
-    lineHeight: LINE_HEIGHT,
-    fontWeight: "normal",
-    fontStyle: "normal",
-    maxWidth: contentWidth > 0 ? contentWidth : MIN_WIDTH - PADDING * 2,
-    padding: "0px",
+  // Measure single-line width (no wrapping)
+  const singleLine = editor.textMeasure.measureText(text, {
+    ...TEXT_OPTS_BASE,
+    maxWidth: MAX_WIDTH,
   });
 
-  const height = Math.max(MIN_HEIGHT, result.h + PADDING * 2);
-  return { width: w, height };
+  const width = Math.max(MIN_WIDTH, Math.min(singleLine.w + PADDING * 2, MAX_WIDTH));
+
+  // Measure with computed width for wrapped height
+  const wrapped = editor.textMeasure.measureText(text, {
+    ...TEXT_OPTS_BASE,
+    maxWidth: width - PADDING * 2,
+  });
+
+  const height = Math.max(MIN_HEIGHT, wrapped.h + PADDING * 2);
+  return { width, height };
 }
 
 const textSizeCache = createComputedCache("named_text size", (ctx, record) => {
@@ -76,7 +87,7 @@ export class NamedTextShapeUtil extends ShapeUtil<NamedTextShape> {
     return {
       name: "untitled",
       text: "",
-      w: 200,
+      w: 480,
     };
   }
 
@@ -90,9 +101,9 @@ export class NamedTextShapeUtil extends ShapeUtil<NamedTextShape> {
   }
 
   getGeometry(shape: NamedTextShape) {
-    const { height } = this.getTextSize(shape);
+    const { width, height } = this.getTextSize(shape);
     return new Rectangle2d({
-      width: shape.props.w,
+      width,
       height,
       isFilled: true,
     });
@@ -103,18 +114,14 @@ export class NamedTextShapeUtil extends ShapeUtil<NamedTextShape> {
   }
 
   override canResize() {
-    return true;
-  }
-
-  override isAspectRatioLocked() {
     return false;
   }
 
   component(shape: NamedTextShape) {
     const editor = useEditor();
     const { id, props } = shape;
-    const { name, text, w } = props;
-    const { height } = this.getTextSize(shape);
+    const { name, text } = props;
+    const { width, height } = this.getTextSize(shape);
 
     const isEditing = useValue("isEditing", () => editor.getEditingShapeId() === id, [editor, id]);
 
@@ -126,7 +133,7 @@ export class NamedTextShapeUtil extends ShapeUtil<NamedTextShape> {
     return (
       <HTMLContainer
         style={{
-          width: w,
+          width,
           height,
           pointerEvents: "all",
         }}
@@ -148,7 +155,7 @@ export class NamedTextShapeUtil extends ShapeUtil<NamedTextShape> {
           }}
         >
           {isEditing ? (
-            <TextEditor shapeId={id} text={text} w={w} />
+            <TextEditor shapeId={id} text={text} w={width} />
           ) : (
             <div
               style={{
@@ -172,23 +179,10 @@ export class NamedTextShapeUtil extends ShapeUtil<NamedTextShape> {
   }
 
   indicator(shape: NamedTextShape) {
-    const { height } = this.getTextSize(shape);
+    const { width, height } = this.getTextSize(shape);
     return (
-      <rect width={toDomPrecision(shape.props.w)} height={toDomPrecision(height)} rx={6} ry={6} />
+      <rect width={toDomPrecision(width)} height={toDomPrecision(height)} rx={6} ry={6} />
     );
-  }
-
-  override onResize(shape: NamedTextShape, info: TLResizeInfo<NamedTextShape>) {
-    const nextW = Math.max(MIN_WIDTH, Math.abs(shape.props.w * info.scaleX));
-    return {
-      id: shape.id,
-      type: shape.type as "named_text",
-      x: info.newPoint.x,
-      y: info.newPoint.y,
-      props: {
-        w: nextW,
-      },
-    };
   }
 
   override onEditEnd(shape: NamedTextShape) {
