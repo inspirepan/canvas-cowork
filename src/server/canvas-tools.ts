@@ -1,6 +1,6 @@
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { CanvasFS, CanvasJsonData } from "./canvas-fs.js";
 
@@ -273,15 +273,61 @@ function createGenerateImageTool(canvasDir: string): ToolDefinition {
 
       const imageBuffer = readFileSync(outputPath);
       const base64 = imageBuffer.toString("base64");
+
+      // Auto-save long prompts to file for reuse in subsequent iterations
+      const PROMPT_FILE_THRESHOLD = 200;
+      const resultContent: { type: "text"; text: string }[] = [
+        { type: "text" as const, text: `Image saved to canvas/${filename}` },
+      ];
+
+      if (prompt.length > PROMPT_FILE_THRESHOLD && !params.prompt_file) {
+        const promptFilePath = savePromptFile(canvasDir, prompt, filename);
+        if (promptFilePath) {
+          resultContent.push({
+            type: "text" as const,
+            text: `<system>The image generation prompt has been saved to ${promptFilePath}. For regeneration or iteration, pass this path as prompt_file to avoid re-typing the full prompt. To modify the prompt, use the Edit tool on the file then pass it as prompt_file. If the user wants to iteratively edit the generated image, use the image as a reference_image with role "edit_target" along with the editing instruction.</system>`,
+          });
+        }
+      } else if (params.prompt_file) {
+        resultContent.push({
+          type: "text" as const,
+          text: `<system>This image was generated using prompt file ${params.prompt_file}. For regeneration, pass the same prompt_file. To modify, edit the file then regenerate.</system>`,
+        });
+      }
+
       return {
         content: [
-          { type: "text" as const, text: `Image saved to canvas/${filename}\n${stdout}` },
+          ...resultContent,
           { type: "image" as const, data: base64, mimeType: "image/png" },
         ],
         details: { path: `canvas/${filename}` },
       };
     },
   };
+}
+
+// -- Prompt file persistence --
+
+function savePromptFile(canvasDir: string, content: string, associatedFile?: string): string | null {
+  try {
+    let filename: string;
+    if (associatedFile) {
+      // Associate prompt file with the generated image: "sunset.png" -> "sunset-prompt.txt"
+      const base = associatedFile.replace(/\.\w+$/, "");
+      filename = `${base}-prompt.txt`;
+    } else {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      filename = `prompt-${timestamp}.txt`;
+    }
+    const filePath = join(canvasDir, filename);
+    if (!existsSync(canvasDir)) {
+      mkdirSync(canvasDir, { recursive: true });
+    }
+    writeFileSync(filePath, content, "utf-8");
+    return `canvas/${filename}`;
+  } catch {
+    return null;
+  }
 }
 
 // -- Internal helpers --

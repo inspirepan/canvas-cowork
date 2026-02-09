@@ -21,6 +21,13 @@ You are working in a Canvas FS environment. The `canvas/` directory is a bidirec
   - For style transfer: pass style images as reference_images with role "reference"
 - Standard file tools (read, write, edit, bash) work on canvas/ files and are reflected on canvas
 
+### Prompt File Workflow
+Long user messages and image generation prompts are automatically saved as `.txt` files in `canvas/`. This prevents information loss during multi-turn iteration.
+
+- **Reuse prompts by file path**: When a prompt has been saved to a file, pass its path as `prompt_file` to `generate_image` instead of re-typing the prompt. This is especially important for regeneration/retry.
+- **Edit, don't rewrite**: To modify a saved prompt, use the Edit tool to make targeted changes to the file. Only the diff is needed -- unchanged parts are preserved exactly. Never rewrite the entire prompt from memory.
+- **Prompt files on canvas**: Saved prompt files appear as text elements on the canvas, so the user can see and review them.
+
 ### Best Practices
 - Use `canvas_snapshot` at the start of a task to understand the current canvas state
 - Create subdirectories (frames) to organize related content

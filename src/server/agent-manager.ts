@@ -1,3 +1,4 @@
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getModel } from "@mariozechner/pi-ai";
@@ -36,9 +37,13 @@ interface ManagedSession {
   createdAt: number;
 }
 
+// Threshold for auto-saving long messages/prompts to files
+const PROMPT_FILE_THRESHOLD = 200;
+
 export class AgentManager {
   private sessions = new Map<string, ManagedSession>();
   private cwd: string;
+  private canvasDir: string | null;
   private onStreamDelta: EventHandler;
   private onSessionStateChange: SessionStateHandler;
   private modelRegistry: ModelRegistry;
@@ -52,6 +57,7 @@ export class AgentManager {
     screenshotCallback?: ScreenshotCallback,
   ) {
     this.cwd = cwd;
+    this.canvasDir = canvasFS?.canvasDir ?? null;
     this.onStreamDelta = onStreamDelta;
     this.onSessionStateChange = onSessionStateChange;
     const agentDir = join(homedir(), ".pi", "agent");
@@ -194,6 +200,21 @@ export class AgentManager {
       managed.title = text.slice(0, 100);
     }
 
+    // Auto-save long user messages to file for prompt persistence.
+    // When attachments are present, the text format is:
+    //   "User attached N item(s) from canvas:\n\n<doc ...>...</doc>\n\n---\n{userMessage}"
+    // Only save the user's actual message, not the attachment metadata.
+    let promptText = text;
+    const attachmentSeparator = "\n\n---\n";
+    const sepIndex = text.indexOf(attachmentSeparator);
+    const userMessage = sepIndex >= 0 ? text.slice(sepIndex + attachmentSeparator.length) : text;
+    if (this.canvasDir && userMessage.length > PROMPT_FILE_THRESHOLD) {
+      const savedPath = this.savePromptFile(userMessage);
+      if (savedPath) {
+        promptText = `${text}\n\n<system>The user message above has been saved to ${savedPath}. If the user provided an image generation prompt, you can use this file path as the prompt_file parameter for generate_image, or edit it with the Edit tool before passing it. This avoids re-typing the full prompt and prevents information loss during iteration.</system>`;
+      }
+    }
+
     // Convert attachments to pi SDK ImageContent
     const images = attachments
       ?.filter((a) => a.type === "image")
@@ -208,7 +229,7 @@ export class AgentManager {
       ...(managed.session.isStreaming ? { streamingBehavior: "followUp" as const } : {}),
     };
 
-    await managed.session.prompt(text, opts);
+    await managed.session.prompt(promptText, opts);
   }
 
   async abort(sessionId: string): Promise<void> {
@@ -268,6 +289,18 @@ export class AgentManager {
   }
 
   // -- Private --
+
+  private savePromptFile(content: string, prefix = "prompt"): string | null {
+    if (!this.canvasDir) return null;
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const filename = `${prefix}-${timestamp}.txt`;
+    const filePath = join(this.canvasDir, filename);
+    if (!existsSync(this.canvasDir)) {
+      mkdirSync(this.canvasDir, { recursive: true });
+    }
+    writeFileSync(filePath, content, "utf-8");
+    return `canvas/${filename}`;
+  }
 
   private injectCanvasSystemPrompt(session: AgentSession): void {
     if (this.canvasTools.length === 0) return;
