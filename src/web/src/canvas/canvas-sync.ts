@@ -3,6 +3,7 @@ import {
   createShapeId,
   type Editor,
   getSnapshot,
+  getSvgAsImage,
   loadSnapshot,
   type TLAssetId,
   type TLParentId,
@@ -38,6 +39,13 @@ function pathToDir(relPath: string): string | null {
 
 const _IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "gif", "svg"]);
 
+function isAnnotatedPath(path: string): boolean {
+  const name = path.split("/").pop() ?? path;
+  const dotIdx = name.lastIndexOf(".");
+  const base = dotIdx > 0 ? name.slice(0, dotIdx) : name;
+  return base.endsWith("_annotated");
+}
+
 function getImageMimeType(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   const mimeMap: Record<string, string> = {
@@ -70,6 +78,8 @@ const FRAME_HEADER_OFFSET = 44; // Space below frame header (32px header + 12px 
 const FADE_IN_DURATION = 300;
 const FADE_OUT_DURATION = 200;
 
+const ANNOTATION_DEBOUNCE_MS = 800;
+
 export class CanvasSync {
   private editor: Editor;
   private sendMsg: (msg: ClientMessage) => void;
@@ -79,6 +89,10 @@ export class CanvasSync {
   private unsubscribe: (() => void) | null = null;
   // Shapes pending fade-out deletion (ignore FS events for these)
   private pendingDeletes = new Set<string>();
+  // Annotation export state
+  private annotationTimer: ReturnType<typeof setTimeout> | null = null;
+  // Track which images currently have annotated exports (to know when to delete)
+  private annotatedImages = new Set<string>(); // image shapeId
 
   constructor(editor: Editor, sendMsg: (msg: ClientMessage) => void) {
     this.editor = editor;
@@ -127,6 +141,10 @@ export class CanvasSync {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
+    if (this.annotationTimer) {
+      clearTimeout(this.annotationTimer);
+      this.annotationTimer = null;
+    }
   }
 
   // -- Canvas -> FS sync (user edits) --
@@ -144,6 +162,7 @@ export class CanvasSync {
   private handleStoreChange(entry: TLStoreEventInfo): void {
     const changes: CanvasSyncChange[] = [];
     const { added, updated, removed } = entry.changes;
+    let drawShapeChanged = false;
 
     // Handle added shapes
     for (const record of Object.values(added)) {
@@ -154,12 +173,21 @@ export class CanvasSync {
         parentId: string;
         props: Record<string, unknown>;
       };
+      if (shape.type === "draw") drawShapeChanged = true;
       const change = this.handleShapeCreated(shape);
       if (change) changes.push(change);
     }
 
-    // Handle updated shapes
+    // Handle updated records (shapes + assets)
     for (const [from, to] of Object.values(updated)) {
+      // When an image asset's src changes to /canvas/..., register the mapping
+      if (to.typeName === "asset") {
+        this.handleAssetUpdated(
+          from as unknown as { id: string; type: string; props: Record<string, unknown> },
+          to as unknown as { id: string; type: string; props: Record<string, unknown> },
+        );
+        continue;
+      }
       if (from.typeName !== "shape") continue;
       const fromShape = from as unknown as {
         id: string;
@@ -173,6 +201,7 @@ export class CanvasSync {
         parentId: string;
         props: Record<string, unknown>;
       };
+      if (toShape.type === "draw") drawShapeChanged = true;
       const updateChanges = this.handleShapeUpdated(fromShape, toShape);
       changes.push(...updateChanges);
     }
@@ -185,12 +214,17 @@ export class CanvasSync {
         type: string;
         props: Record<string, unknown>;
       };
-      const change = this.handleShapeDeleted(shape);
-      if (change) changes.push(change);
+      if (shape.type === "draw") drawShapeChanged = true;
+      changes.push(...this.handleShapeDeleted(shape));
     }
 
     if (changes.length > 0) {
       this.sendMsg({ type: "canvas_sync", changes });
+    }
+
+    // If draw shapes changed, schedule annotation export check
+    if (drawShapeChanged) {
+      this.scheduleAnnotationCheck();
     }
   }
 
@@ -218,22 +252,8 @@ export class CanvasSync {
     }
     if (shape.type === "image") {
       // Image was uploaded via assets.upload which already wrote the file.
-      // We just need to register the mapping from the asset src URL.
-      const assetId = shape.props.assetId as string | null;
-      if (assetId) {
-        const asset = this.editor.getAsset(assetId as TLAssetId);
-        if (asset?.type === "image" && asset.props.src) {
-          const src = asset.props.src as string;
-          // Extract relative path from /canvas/... URL
-          if (src.startsWith("/canvas/")) {
-            const path = src.slice("/canvas/".length);
-            this.shapeToFile.set(shape.id, path);
-            this.fileToShape.set(path, shape.id);
-            // File already exists from upload, no sync needed
-            return null;
-          }
-        }
-      }
+      // Register the mapping from the asset src URL.
+      this.tryRegisterImageMapping(shape.id, shape.props.assetId as string | null);
     }
     return null;
   }
@@ -332,15 +352,15 @@ export class CanvasSync {
     id: string;
     type: string;
     props: Record<string, unknown>;
-  }): CanvasSyncChange | null {
+  }): CanvasSyncChange[] {
     const path = this.shapeToFile.get(shape.id);
-    if (!path) return null;
+    if (!path) return [];
 
     this.shapeToFile.delete(shape.id);
     this.fileToShape.delete(path);
 
     if (shape.type === "named_text") {
-      return { action: "delete", shapeType: "named_text", path };
+      return [{ action: "delete", shapeType: "named_text", path }];
     }
     if (shape.type === "frame") {
       // Remove all children mappings too
@@ -351,12 +371,66 @@ export class CanvasSync {
           this.fileToShape.delete(fp);
         }
       }
-      return { action: "delete", shapeType: "frame", path };
+      return [{ action: "delete", shapeType: "frame", path }];
     }
     if (shape.type === "image") {
-      return { action: "delete", shapeType: "image", path };
+      const result: CanvasSyncChange[] = [{ action: "delete", shapeType: "image", path }];
+      // Also delete the annotated export if it exists
+      if (this.annotatedImages.has(shape.id)) {
+        this.annotatedImages.delete(shape.id);
+        result.push({ action: "delete", shapeType: "image", path: this.makeAnnotatedPath(path) });
+      }
+      return result;
     }
-    return null;
+    return [];
+  }
+
+  // When an image asset gets its src updated (upload complete), register the mapping
+  private handleAssetUpdated(
+    _from: { id: string; type: string; props: Record<string, unknown> },
+    to: { id: string; type: string; props: Record<string, unknown> },
+  ): void {
+    if (to.type !== "image") return;
+    const newSrc = to.props.src as string | undefined;
+    if (!newSrc?.startsWith("/canvas/")) return;
+
+    const path = newSrc.slice("/canvas/".length);
+    if (this.fileToShape.has(path)) return;
+
+    // Find the image shape referencing this asset
+    for (const shapeId of this.editor.getCurrentPageShapeIds()) {
+      const shape = this.editor.getShape(shapeId);
+      if (!shape || shape.type !== "image") continue;
+      const assetId = (shape.props as unknown as Record<string, unknown>).assetId as
+        | string
+        | undefined;
+      if (assetId === to.id && !this.shapeToFile.has(shape.id)) {
+        this.shapeToFile.set(shape.id, path);
+        this.fileToShape.set(path, shape.id);
+        break;
+      }
+    }
+  }
+
+  // Try to register image shape mapping, retry if asset src not yet available
+  private tryRegisterImageMapping(shapeId: string, assetId: string | null, attempt = 0): void {
+    if (!assetId || this.shapeToFile.has(shapeId)) return;
+
+    const asset = this.editor.getAsset(assetId as TLAssetId);
+    if (asset?.type === "image" && asset.props.src) {
+      const src = asset.props.src as string;
+      if (src.startsWith("/canvas/")) {
+        const path = src.slice("/canvas/".length);
+        this.shapeToFile.set(shapeId, path);
+        this.fileToShape.set(path, shapeId);
+        return;
+      }
+    }
+
+    // Asset src not yet available (still uploading), retry
+    if (attempt < 20) {
+      setTimeout(() => this.tryRegisterImageMapping(shapeId, assetId, attempt + 1), 500);
+    }
   }
 
   // -- FS -> Canvas sync (agent/external edits) --
@@ -369,6 +443,9 @@ export class CanvasSync {
     const asyncImageCreates: CanvasFSEvent[] = [];
 
     for (const change of changes) {
+      // Skip _annotated files -- they're managed by the annotation export system
+      if (isAnnotatedPath(change.path)) continue;
+
       if (
         change.action === "created" &&
         !change.isDirectory &&
@@ -607,6 +684,7 @@ export class CanvasSync {
 
   private async createImageFromFS(event: CanvasFSEvent): Promise<void> {
     if (this.fileToShape.has(event.path)) return;
+    if (isAnnotatedPath(event.path)) return;
 
     const name = pathToName(event.path);
     const src = `/canvas/${event.path}`;
@@ -850,7 +928,9 @@ export class CanvasSync {
     });
 
     // Handle image files asynchronously (need to load dimensions)
-    const imageFiles = files.filter((f) => f.type === "image" && !this.fileToShape.has(f.path));
+    const imageFiles = files.filter(
+      (f) => f.type === "image" && !this.fileToShape.has(f.path) && !isAnnotatedPath(f.path),
+    );
     for (const file of imageFiles) {
       this.createImageFromFS({
         action: "created",
@@ -1058,5 +1138,109 @@ export class CanvasSync {
     }
 
     return { x: FRAME_INNER_PADDING, y: maxBottom + SHAPE_SPACING };
+  }
+
+  // -- Annotation export --
+
+  private scheduleAnnotationCheck(): void {
+    if (this.annotationTimer) clearTimeout(this.annotationTimer);
+    this.annotationTimer = setTimeout(() => {
+      this.annotationTimer = null;
+      this.checkAnnotations();
+    }, ANNOTATION_DEBOUNCE_MS);
+  }
+
+  private checkAnnotations(): void {
+    // Find all image shapes that have a file mapping
+    const imageShapes: { id: TLShapeId; parentId: string; path: string }[] = [];
+    for (const [shapeId, path] of this.shapeToFile.entries()) {
+      const shape = this.editor.getShape(shapeId as TLShapeId);
+      if (!shape || shape.type !== "image") continue;
+      imageShapes.push({ id: shape.id, parentId: shape.parentId, path });
+    }
+
+    // For each image, find overlapping draw shapes
+    for (const img of imageShapes) {
+      const overlapping = this.findOverlappingDrawShapes(img.id);
+      const wasAnnotated = this.annotatedImages.has(img.id);
+
+      if (overlapping.length > 0) {
+        // Has annotations: export flattened image
+        this.annotatedImages.add(img.id);
+        this.exportAnnotatedImage(img.id, img.path, overlapping);
+      } else if (wasAnnotated) {
+        // Was annotated but annotations removed: delete the annotated file
+        this.annotatedImages.delete(img.id);
+        const annotatedPath = this.makeAnnotatedPath(img.path);
+        this.sendMsg({
+          type: "canvas_sync",
+          changes: [{ action: "delete", shapeType: "image", path: annotatedPath }],
+        });
+      }
+    }
+  }
+
+  private findOverlappingDrawShapes(imageShapeId: TLShapeId): TLShapeId[] {
+    const imgBounds = this.editor.getShapePageBounds(imageShapeId);
+    const imgShape = this.editor.getShape(imageShapeId);
+    if (!(imgBounds && imgShape)) return [];
+
+    const result: TLShapeId[] = [];
+    for (const id of this.editor.getCurrentPageShapeIds()) {
+      const shape = this.editor.getShape(id);
+      if (!shape || shape.type !== "draw") continue;
+      // Must share parent (same frame or both on page)
+      if (shape.parentId !== imgShape.parentId) continue;
+      const drawBounds = this.editor.getShapePageBounds(id);
+      if (!drawBounds) continue;
+      // AABB overlap check
+      if (
+        drawBounds.x < imgBounds.x + imgBounds.w &&
+        drawBounds.x + drawBounds.w > imgBounds.x &&
+        drawBounds.y < imgBounds.y + imgBounds.h &&
+        drawBounds.y + drawBounds.h > imgBounds.y
+      ) {
+        result.push(id);
+      }
+    }
+    return result;
+  }
+
+  private makeAnnotatedPath(originalPath: string): string {
+    const dotIdx = originalPath.lastIndexOf(".");
+    if (dotIdx <= 0) return `${originalPath}_annotated`;
+    return `${originalPath.slice(0, dotIdx)}_annotated.png`;
+  }
+
+  private async exportAnnotatedImage(
+    imageShapeId: TLShapeId,
+    originalPath: string,
+    drawShapeIds: TLShapeId[],
+  ): Promise<void> {
+    const shapeIds = [imageShapeId, ...drawShapeIds];
+    const svgResult = await this.editor.getSvgElement(shapeIds);
+    if (!svgResult) return;
+
+    const { svg, width, height } = svgResult;
+    const svgString = new XMLSerializer().serializeToString(svg);
+    const blob = await getSvgAsImage(svgString, {
+      type: "png",
+      width,
+      height,
+      pixelRatio: 2,
+    });
+    if (!blob) return;
+
+    // Upload via existing endpoint
+    const annotatedPath = this.makeAnnotatedPath(originalPath);
+    const fileName = annotatedPath.split("/").pop() ?? annotatedPath;
+    const formData = new FormData();
+    formData.append("file", blob, fileName);
+    formData.append("fileName", annotatedPath);
+    try {
+      await fetch("/canvas/upload-annotated", { method: "POST", body: formData });
+    } catch {
+      // Silently fail -- annotation export is best-effort
+    }
   }
 }

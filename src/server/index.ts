@@ -322,6 +322,27 @@ const server = Bun.serve({
         }
       }
 
+      // POST /canvas/upload-annotated - overwrite annotated image export
+      if (url.pathname === "/canvas/upload-annotated" && req.method === "POST") {
+        try {
+          const formData = await req.formData();
+          const file = formData.get("file") as File | null;
+          const fileName = formData.get("fileName") as string | null;
+          if (!(file && fileName)) {
+            return new Response("Missing file or fileName", { status: 400 });
+          }
+          const safeName = fileName.replace(/[^a-zA-Z0-9._\-/]/g, "_");
+          if (safeName.includes("..")) {
+            return new Response("Forbidden", { status: 403 });
+          }
+          const buffer = await file.arrayBuffer();
+          canvasFS.writeBinaryFile(safeName, Buffer.from(buffer));
+          return Response.json({ src: `/canvas/${safeName}` });
+        } catch (_err) {
+          return new Response("Upload failed", { status: 500 });
+        }
+      }
+
       // GET /canvas/* - serve canvas files
       const relPath = decodeURIComponent(url.pathname.slice("/canvas/".length));
       if (relPath.includes("..")) {

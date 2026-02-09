@@ -74,7 +74,12 @@ const canvasAssetStore: TLAssetStore = {
     // Update asset name to match the actual filename on disk
     if (editorRef) {
       queueMicrotask(() => {
-        editorRef?.updateAssets([{ id: asset.id, type: "image", props: { name: finalName } }]);
+        const existing = editorRef?.getAsset(asset.id);
+        if (existing?.type === "image") {
+          editorRef?.updateAssets([
+            { ...existing, props: { ...existing.props, name: finalName } },
+          ]);
+        }
       });
     }
     return { src };
