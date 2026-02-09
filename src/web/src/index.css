@@ -79,7 +79,7 @@
   --sidebar-ring: oklch(0.708 0.005 49);
 }
 
-* {
+*:where(:not(.tldraw-container, .tldraw-container *)) {
   border-color: var(--border);
 }
 
@@ -104,26 +104,26 @@ body {
   margin: 0 !important;
 }
 
-* {
+*:where(:not(.tldraw-container, .tldraw-container *)) {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 
-*::-webkit-scrollbar {
+*:where(:not(.tldraw-container, .tldraw-container *))::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-*::-webkit-scrollbar-track {
+*:where(:not(.tldraw-container, .tldraw-container *))::-webkit-scrollbar-track {
   background: transparent;
 }
 
-*::-webkit-scrollbar-thumb {
+*:where(:not(.tldraw-container, .tldraw-container *))::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 3px;
 }
 
-*::-webkit-scrollbar-thumb:hover {
+*:where(:not(.tldraw-container, .tldraw-container *))::-webkit-scrollbar-thumb:hover {
   background: var(--muted-foreground);
 }
 
@@ -143,4 +143,11 @@ textarea::-webkit-scrollbar {
   font-size: 0.9em !important;
   font-weight: 400 !important;
   color: var(--muted-foreground) !important;
+}
+
+/* Move tldraw style panel to bottom-right */
+.tldraw-container .tlui-layout__top__right {
+  justify-content: flex-end !important;
+  padding-bottom: 12px;
+  padding-right: 12px;
 }
