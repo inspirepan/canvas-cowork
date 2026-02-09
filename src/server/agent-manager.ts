@@ -444,6 +444,7 @@ export class AgentManager {
           model: msg.model || "",
           provider: msg.provider || "",
           stopReason: msg.stopReason,
+          errorMessage: msg.errorMessage,
           timestamp: msg.timestamp,
         };
       case "toolResult":

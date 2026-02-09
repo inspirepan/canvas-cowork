@@ -67,6 +67,7 @@ export interface SerializedAssistantMessage {
   model: string;
   provider: string;
   stopReason?: string;
+  errorMessage?: string;
   timestamp: number;
 }
 

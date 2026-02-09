@@ -58,6 +58,7 @@ export interface UIAssistantMessage {
   content: UIContentBlock[];
   model: string;
   isStreaming?: boolean;
+  errorMessage?: string;
   timestamp: number;
 }
 
@@ -145,6 +146,7 @@ function serializeToUIMessages(messages: SerializedMessage[]): UIMessage[] {
         role: "assistant",
         content: blocks,
         model: msg.model,
+        errorMessage: msg.errorMessage,
         timestamp: msg.timestamp,
       };
       result.push(currentAssistant);

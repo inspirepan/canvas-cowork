@@ -335,6 +335,12 @@ function AssistantMessageView({ message }: { message: UIAssistantMessage }) {
       {message.isStreaming && message.content.length === 0 && (
         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
       )}
+      {message.errorMessage && (
+        <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <X className="h-4 w-4 shrink-0 mt-0.5" />
+          <span className="break-words">{message.errorMessage}</span>
+        </div>
+      )}
     </div>
   );
 }
