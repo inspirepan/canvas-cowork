@@ -8,6 +8,7 @@ import type {
   SessionInfo,
   ThinkingLevel,
 } from "../../../shared/protocol.js";
+import type { CanvasContext } from "./AgentPanel.js";
 import { InputBox } from "./SessionChat.js";
 
 function formatRelativeTime(timestamp: number): string {
@@ -36,6 +37,7 @@ interface SessionListProps {
   defaultAvailableThinkingLevels: ThinkingLevel[];
   onDefaultModelChange: (model: ModelInfo) => void;
   onDefaultThinkingLevelChange: (level: ThinkingLevel) => void;
+  canvasContext?: CanvasContext;
 }
 
 export function SessionList({
@@ -49,6 +51,7 @@ export function SessionList({
   defaultAvailableThinkingLevels,
   onDefaultModelChange,
   onDefaultThinkingLevelChange,
+  canvasContext,
 }: SessionListProps) {
   return (
     <div className="flex flex-col h-full">
@@ -115,6 +118,7 @@ export function SessionList({
           if (m) onDefaultModelChange(m);
         }}
         onThinkingLevelChange={onDefaultThinkingLevelChange}
+        canvasContext={canvasContext}
       />
     </div>
   );

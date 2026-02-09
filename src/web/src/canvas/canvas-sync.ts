@@ -99,6 +99,46 @@ export class CanvasSync {
     this.sendMsg = sendMsg;
   }
 
+  // Public accessors for external consumers (selection hook, @ mention)
+  getShapeToFile(): ReadonlyMap<string, string> {
+    return this.shapeToFile;
+  }
+
+  getFileToShape(): ReadonlyMap<string, string> {
+    return this.fileToShape;
+  }
+
+  // Get all canvas items for @ mention autocomplete
+  getAllCanvasItems(): { shapeId: string; path: string; type: "text" | "image" | "frame"; name: string }[] {
+    const items: { shapeId: string; path: string; type: "text" | "image" | "frame"; name: string }[] = [];
+    for (const [shapeId, path] of this.shapeToFile) {
+      const shape = this.editor.getShape(shapeId as TLShapeId);
+      if (!shape) continue;
+      let type: "text" | "image" | "frame";
+      let name: string;
+      if (shape.type === "named_text") {
+        type = "text";
+        name = (shape.props as { name: string }).name;
+      } else if (shape.type === "image") {
+        type = "image";
+        name = path.split("/").pop() ?? path;
+      } else if (shape.type === "frame") {
+        type = "frame";
+        name = (shape.props as { name: string }).name;
+      } else {
+        continue;
+      }
+      items.push({ shapeId, path, type, name });
+    }
+    // Sort: frames first, then alphabetical
+    items.sort((a, b) => {
+      if (a.type === "frame" && b.type !== "frame") return -1;
+      if (a.type !== "frame" && b.type === "frame") return 1;
+      return a.name.localeCompare(b.name);
+    });
+    return items;
+  }
+
   // Wrap shape mutations in mergeRemoteChanges so the store listener
   // (source: 'user') ignores them, preventing canvas->FS->canvas loops.
   private applyRemote(fn: () => void): void {

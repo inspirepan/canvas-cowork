@@ -8,6 +8,8 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  FileText,
+  FolderOpen,
   ImageIcon,
   Loader2,
   Plus,
@@ -34,6 +36,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { Attachment, ModelInfo, ThinkingLevel } from "../../../shared/protocol.js";
+import {
+  buildMessageWithAttachments,
+  type CanvasAttachment,
+  deduplicateAttachments,
+} from "../canvas/canvas-attachments.js";
 import type {
   SessionState,
   UIAssistantMessage,
@@ -41,6 +48,7 @@ import type {
   UIThinkingBlock,
   UIToolCallBlock,
 } from "../hooks/use-agent.js";
+import type { CanvasContext } from "./AgentPanel.js";
 import { DiffView } from "./DiffView";
 
 // -- Tool Call Block --
@@ -137,9 +145,9 @@ function ToolCallView({ block }: { block: UIToolCallBlock }) {
     .map((c) => c.text ?? "")
     .join("");
 
-  const resultImages = block.result?.content?.filter(
-    (c) => c.type === "image" && c.data,
-  ) as Array<{ type: string; data: string; mimeType?: string }> | undefined;
+  const resultImages = block.result?.content?.filter((c) => c.type === "image" && c.data) as
+    | Array<{ type: string; data: string; mimeType?: string }>
+    | undefined;
 
   const filePath = args && typeof args.path === "string" ? args.path : undefined;
 
@@ -359,6 +367,81 @@ function fileToAttachment(file: File): Promise<AttachmentChip> {
   });
 }
 
+// Regex for whitespace detection (used in @ mention trigger)
+const WHITESPACE_RE = /\s/;
+
+// -- Canvas attachment chip icon --
+
+function CanvasTypeIcon({ type }: { type: "text" | "image" | "frame" }) {
+  if (type === "text") return <FileText className="h-3 w-3 text-muted-foreground shrink-0" />;
+  if (type === "image") return <ImageIcon className="h-3 w-3 text-muted-foreground shrink-0" />;
+  return <FolderOpen className="h-3 w-3 text-muted-foreground shrink-0" />;
+}
+
+const chipStyles = {
+  selection: "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800",
+  mention: "bg-purple-50 dark:bg-purple-950/30 border-purple-200 dark:border-purple-800",
+};
+
+function CanvasChip({
+  attachment,
+  variant,
+  onDismiss,
+}: {
+  attachment: CanvasAttachment;
+  variant: "selection" | "mention";
+  onDismiss: () => void;
+}) {
+  const isImage = attachment.type === "image" && attachment.imageSrc;
+
+  if (isImage) {
+    return (
+      <div className={`relative group overflow-hidden rounded-md border ${chipStyles[variant]}`}>
+        <img
+          src={attachment.imageSrc}
+          alt={attachment.name}
+          className="h-14 max-w-[100px] object-cover"
+        />
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/50 to-transparent px-1 pb-0.5 pt-2">
+          <span className="text-[10px] text-white truncate block leading-tight">
+            {attachment.name}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="absolute top-0.5 right-0.5 rounded-full bg-black/40 p-0.5 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+        >
+          <X className="h-2.5 w-2.5" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`flex items-center gap-1 border rounded-md px-1.5 py-0.5 text-xs ${chipStyles[variant]}`}
+    >
+      <CanvasTypeIcon type={attachment.type} />
+      <span className="truncate max-w-[100px]">{attachment.name}</span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="text-muted-foreground hover:text-foreground ml-0.5"
+      >
+        <X className="h-2.5 w-2.5" />
+      </button>
+    </div>
+  );
+}
+
+// -- @ mention state --
+
+interface MentionQuery {
+  startIdx: number;
+  filter: string;
+}
+
 export interface InputBoxProps {
   autoFocus?: boolean;
   onSubmit: (text: string, attachments?: Attachment[]) => void;
@@ -370,8 +453,10 @@ export interface InputBoxProps {
   models?: ModelInfo[];
   onModelChange?: (provider: string, modelId: string) => void;
   onThinkingLevelChange?: (level: ThinkingLevel) => void;
+  canvasContext?: CanvasContext;
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: InputBox with canvas integration
 export function InputBox({
   autoFocus,
   onSubmit,
@@ -383,12 +468,36 @@ export function InputBox({
   models,
   onModelChange,
   onThinkingLevelChange,
+  canvasContext,
 }: InputBoxProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<AttachmentChip[]>([]);
   const [modelOpen, setModelOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Canvas selection chips state
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const prevSelectionRef = useRef<string>("");
+
+  // @ mention state
+  const [mentionAttachments, setMentionAttachments] = useState<CanvasAttachment[]>([]);
+  const [mentionQuery, setMentionQuery] = useState<MentionQuery | null>(null);
+  const [mentionIdx, setMentionIdx] = useState(0);
+
+  // Reset dismissed IDs when selection changes significantly
+  const selectionAttachments = canvasContext?.selectionAttachments ?? [];
+  const selectionKey = selectionAttachments
+    .map((a) => a.shapeId)
+    .sort()
+    .join(",");
+  if (selectionKey !== prevSelectionRef.current) {
+    prevSelectionRef.current = selectionKey;
+    setDismissedIds(new Set());
+  }
+
+  // Effective selection chips (excluding dismissed)
+  const effectiveSelectionChips = selectionAttachments.filter((a) => !dismissedIds.has(a.shapeId));
 
   // Auto-focus on mount
   useEffect(() => {
@@ -407,27 +516,143 @@ export function InputBox({
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
+  const dismissSelectionChip = (shapeId: string) => {
+    setDismissedIds((prev) => new Set([...prev, shapeId]));
+  };
+
+  const removeMentionChip = (shapeId: string) => {
+    setMentionAttachments((prev) => prev.filter((a) => a.shapeId !== shapeId));
+  };
+
+  // @ mention: get filtered items
+  const mentionItems = (() => {
+    if (!(mentionQuery && canvasContext)) return [];
+    const allItems = canvasContext.getCanvasItems();
+    const filter = mentionQuery.filter.toLowerCase();
+    if (!filter) return allItems;
+    return allItems.filter(
+      (item) =>
+        item.name.toLowerCase().includes(filter) || item.path.toLowerCase().includes(filter),
+    );
+  })();
+
+  // @ mention: select item from menu
+  const selectMention = (item: { shapeId: string; path: string; type: string; name: string }) => {
+    if (!(canvasContext && mentionQuery)) return;
+    const resolved = canvasContext.resolveCanvasItem(item.shapeId, item.path);
+    if (!resolved) return;
+
+    // Avoid duplicate mentions
+    if (!mentionAttachments.some((a) => a.path === resolved.path)) {
+      setMentionAttachments((prev) => [...prev, resolved]);
+    }
+
+    // Remove the @filter text from input
+    const before = text.slice(0, mentionQuery.startIdx);
+    const after = text.slice(mentionQuery.startIdx + 1 + mentionQuery.filter.length);
+    setText(before + after);
+
+    setMentionQuery(null);
+    setMentionIdx(0);
+    textareaRef.current?.focus();
+  };
+
   const handleSubmit = () => {
     const trimmed = text.trim();
-    if (!trimmed && attachments.length === 0) return;
-    const atts: Attachment[] | undefined =
-      attachments.length > 0
-        ? attachments.map((a) => ({
-            type: "image" as const,
-            data: a.data,
-            mimeType: a.mimeType,
-            name: a.name,
-          }))
-        : undefined;
-    onSubmit(trimmed || "(image)", atts);
+
+    // Collect image file attachments
+    const fileAtts: Attachment[] = attachments.map((a) => ({
+      type: "image" as const,
+      data: a.data,
+      mimeType: a.mimeType,
+      name: a.name,
+    }));
+
+    // Collect canvas attachments (selection + mentions, deduplicated)
+    const canvasAtts = deduplicateAttachments(effectiveSelectionChips, mentionAttachments);
+
+    if (!trimmed && fileAtts.length === 0 && canvasAtts.length === 0) return;
+
+    // Build enriched message with canvas context
+    let finalText = trimmed || "(attachment)";
+    let allAtts = [...fileAtts];
+
+    if (canvasAtts.length > 0) {
+      const { text: enrichedText, imageAttachments } = buildMessageWithAttachments(
+        finalText,
+        canvasAtts,
+      );
+      finalText = enrichedText;
+      allAtts = [...allAtts, ...imageAttachments];
+    }
+
+    onSubmit(finalText, allAtts.length > 0 ? allAtts : undefined);
     setText("");
     setAttachments([]);
+    setMentionAttachments([]);
+    setMentionQuery(null);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
   };
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: @ mention state machine
+  const handleTextChange = (newText: string) => {
+    setText(newText);
+
+    // @ mention detection
+    const cursorPos = textareaRef.current?.selectionStart ?? newText.length;
+    if (mentionQuery) {
+      // Update or close existing mention query
+      if (newText[mentionQuery.startIdx] !== "@" || cursorPos <= mentionQuery.startIdx) {
+        setMentionQuery(null);
+        setMentionIdx(0);
+      } else {
+        const filterText = newText.slice(mentionQuery.startIdx + 1, cursorPos);
+        if (filterText.includes(" ") || filterText.includes("\n")) {
+          setMentionQuery(null);
+          setMentionIdx(0);
+        } else {
+          setMentionQuery({ startIdx: mentionQuery.startIdx, filter: filterText });
+          setMentionIdx(0);
+        }
+      }
+    } else if (cursorPos > 0 && newText[cursorPos - 1] === "@") {
+      // Trigger @ mention if preceded by whitespace or at start
+      if (cursorPos === 1 || WHITESPACE_RE.test(newText[cursorPos - 2])) {
+        setMentionQuery({ startIdx: cursorPos - 1, filter: "" });
+        setMentionIdx(0);
+      }
+    }
+  };
+
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keyboard navigation with @ mention
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // @ mention keyboard navigation
+    if (mentionQuery && mentionItems.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIdx((prev) => (prev + 1) % mentionItems.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIdx((prev) => (prev - 1 + mentionItems.length) % mentionItems.length);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        selectMention(mentionItems[mentionIdx]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMentionQuery(null);
+        setMentionIdx(0);
+        return;
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSubmit();
@@ -471,11 +696,38 @@ export function InputBox({
     xhigh: "Max",
   };
 
-  const hasContent = text.trim() || attachments.length > 0;
+  const hasCanvasChips = effectiveSelectionChips.length > 0 || mentionAttachments.length > 0;
+  const hasContent = text.trim() || attachments.length > 0 || hasCanvasChips;
 
   return (
-    <form autoComplete="off" onSubmit={(e) => e.preventDefault()} className="shrink-0 bg-muted/40 p-3 space-y-2">
-      {/* Attachment chips */}
+    <form
+      autoComplete="off"
+      onSubmit={(e) => e.preventDefault()}
+      className="shrink-0 bg-muted/40 p-3 space-y-2"
+    >
+      {/* Canvas attachment chips (from selection + @ mentions) */}
+      {hasCanvasChips && (
+        <div className="flex flex-wrap gap-1.5">
+          {effectiveSelectionChips.map((a) => (
+            <CanvasChip
+              key={`sel-${a.shapeId}`}
+              attachment={a}
+              variant="selection"
+              onDismiss={() => dismissSelectionChip(a.shapeId)}
+            />
+          ))}
+          {mentionAttachments.map((a) => (
+            <CanvasChip
+              key={`mention-${a.shapeId}`}
+              attachment={a}
+              variant="mention"
+              onDismiss={() => removeMentionChip(a.shapeId)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Image file attachment chips */}
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {attachments.map((a) => (
@@ -497,16 +749,54 @@ export function InputBox({
         </div>
       )}
 
-      <textarea
-        ref={textareaRef}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={handleKeyDown}
-        onPaste={handlePaste}
-        placeholder="Ask a question..."
-        rows={1}
-        className="w-full resize-none rounded-xl border border-border/40 bg-background px-3.5 py-2.5 text-sm focus:outline-none focus:border-foreground/15 focus:shadow-[0_0_0_3px_rgba(0,0,0,0.04)] transition-[border-color,box-shadow] duration-200 placeholder:text-muted-foreground/60"
-      />
+      {/* Textarea with @ mention popup */}
+      <div className="relative">
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={(e) => handleTextChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          placeholder={
+            hasCanvasChips
+              ? "Ask about selected items..."
+              : "Ask a question... (type @ to reference canvas)"
+          }
+          rows={1}
+          className="w-full resize-none rounded-xl border border-border/40 bg-background px-3.5 py-2.5 text-sm focus:outline-none focus:border-foreground/15 focus:shadow-[0_0_0_3px_rgba(0,0,0,0.04)] transition-[border-color,box-shadow] duration-200 placeholder:text-muted-foreground/60"
+        />
+
+        {/* @ mention autocomplete popup */}
+        {mentionQuery && mentionItems.length > 0 && (
+          <div className="absolute bottom-full left-0 w-full mb-1 bg-popover border rounded-md shadow-md max-h-48 overflow-y-auto z-50">
+            {mentionItems.map((item, i) => (
+              <button
+                key={item.shapeId}
+                type="button"
+                className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors ${
+                  i === mentionIdx ? "bg-accent" : "hover:bg-accent/50"
+                }`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  selectMention(item);
+                }}
+                onMouseEnter={() => setMentionIdx(i)}
+              >
+                <CanvasTypeIcon type={item.type} />
+                <span className="truncate">{item.name}</span>
+                <span className="text-muted-foreground ml-auto truncate text-[10px]">
+                  {item.path}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+        {mentionQuery && mentionItems.length === 0 && mentionQuery.filter && (
+          <div className="absolute bottom-full left-0 w-full mb-1 bg-popover border rounded-md shadow-md z-50 px-3 py-2 text-xs text-muted-foreground">
+            No matching canvas items
+          </div>
+        )}
+      </div>
 
       {/* Hidden file input */}
       <input
@@ -625,6 +915,7 @@ interface SessionChatProps {
   onAbort: () => void;
   onModelChange: (provider: string, modelId: string) => void;
   onThinkingLevelChange: (level: ThinkingLevel) => void;
+  canvasContext?: CanvasContext;
 }
 
 export function SessionChat({
@@ -635,6 +926,7 @@ export function SessionChat({
   onAbort,
   onModelChange,
   onThinkingLevelChange,
+  canvasContext,
 }: SessionChatProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
@@ -725,6 +1017,7 @@ export function SessionChat({
         models={models}
         onModelChange={onModelChange}
         onThinkingLevelChange={onThinkingLevelChange}
+        canvasContext={canvasContext}
       />
     </div>
   );

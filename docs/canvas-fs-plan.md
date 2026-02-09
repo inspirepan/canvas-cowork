@@ -967,17 +967,17 @@ src/
 19. While shapes are selected, another shape is deleted externally -- confirm chip for deleted shape is removed
 
 **Tasks**:
-- [ ] Create `useCanvasSelection` hook: listen to `editor.getSelectedShapeIds()`, resolve to `CanvasAttachment[]` via shapeToFile mapping
-- [ ] Filter selection to referenceable types only (NamedText, Image, Frame; exclude Arrow, Draw)
-- [ ] Resolve Frame attachments: recursively collect children content
-- [ ] Add attachment chips UI area in AgentPanel (above input, pill/tag style)
-- [ ] Implement chip dismiss (click X to exclude shape from context)
-- [ ] Implement live sync: chips update as selection changes on canvas
-- [ ] Create `@` mention autocomplete: trigger on `@` in input, list all canvas shapes
-- [ ] Implement fuzzy search filtering in autocomplete menu
-- [ ] Implement keyboard navigation (arrow keys, Enter, Escape) for autocomplete
-- [ ] Insert styled reference token in input on selection
-- [ ] Implement `buildMessageWithAttachments()`: construct `<doc>` wrapped message from attachments
-- [ ] Handle Image attachments as `ImageContent` blocks (not inline base64)
-- [ ] Implement deduplication: merge box-selection and `@` mention references at send time
-- [ ] Integrate with AgentPanel send flow: inject attachments into user message before sending to agent
+- [x] Create `useCanvasSelection` hook: listen to `editor.getSelectedShapeIds()`, resolve to `CanvasAttachment[]` via shapeToFile mapping
+- [x] Filter selection to referenceable types only (NamedText, Image, Frame; exclude Arrow, Draw)
+- [x] Resolve Frame attachments: recursively collect children content
+- [x] Add attachment chips UI area in AgentPanel (above input, pill/tag style)
+- [x] Implement chip dismiss (click X to exclude shape from context)
+- [x] Implement live sync: chips update as selection changes on canvas
+- [x] Create `@` mention autocomplete: trigger on `@` in input, list all canvas shapes
+- [x] Implement fuzzy search filtering in autocomplete menu
+- [x] Implement keyboard navigation (arrow keys, Enter, Escape) for autocomplete
+- [x] Insert styled reference token in input on selection
+- [x] Implement `buildMessageWithAttachments()`: construct `<doc>` wrapped message from attachments
+- [x] Handle Image attachments as `ImageContent` blocks (not inline base64)
+- [x] Implement deduplication: merge box-selection and `@` mention references at send time
+- [x] Integrate with AgentPanel send flow: inject attachments into user message before sending to agent

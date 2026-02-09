@@ -1,9 +1,27 @@
 import { Loader2 } from "lucide-react";
+import type { CanvasAttachment } from "../canvas/canvas-attachments.js";
 import type { UseAgentReturn } from "../hooks/use-agent.js";
 import { SessionChat } from "./SessionChat.js";
 import { SessionList } from "./SessionList.js";
 
-export function AgentPanel({ agent }: { agent: UseAgentReturn }) {
+export interface CanvasContext {
+  selectionAttachments: CanvasAttachment[];
+  getCanvasItems: () => {
+    shapeId: string;
+    path: string;
+    type: "text" | "image" | "frame";
+    name: string;
+  }[];
+  resolveCanvasItem: (shapeId: string, path: string) => CanvasAttachment | null;
+}
+
+export function AgentPanel({
+  agent,
+  canvasContext,
+}: {
+  agent: UseAgentReturn;
+  canvasContext: CanvasContext;
+}) {
   if (!agent.connected) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -29,6 +47,7 @@ export function AgentPanel({ agent }: { agent: UseAgentReturn }) {
         onAbort={() => agent.abort(sessionId)}
         onModelChange={(provider, modelId) => agent.setModel(sessionId, provider, modelId)}
         onThinkingLevelChange={(level) => agent.setThinkingLevel(sessionId, level)}
+        canvasContext={canvasContext}
       />
     );
   }
@@ -52,6 +71,7 @@ export function AgentPanel({ agent }: { agent: UseAgentReturn }) {
       defaultAvailableThinkingLevels={agent.defaultAvailableThinkingLevels}
       onDefaultModelChange={agent.setDefaultModel}
       onDefaultThinkingLevelChange={agent.setDefaultThinkingLevel}
+      canvasContext={canvasContext}
     />
   );
 }

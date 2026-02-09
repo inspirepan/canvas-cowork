@@ -1,10 +1,11 @@
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Editor } from "tldraw";
 import { CanvasSync } from "./canvas/canvas-sync.js";
 import { AgentPanel } from "./components/AgentPanel.js";
 import { CanvasEditor } from "./components/CanvasEditor.js";
 import { useAgent } from "./hooks/use-agent.js";
+import { useCanvasSelection } from "./hooks/useCanvasSelection.js";
 
 const PANEL_WIDTH = 380;
 
@@ -12,6 +13,7 @@ export function App() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [editor, setEditor] = useState<Editor | null>(null);
   const syncRef = useRef<CanvasSync | null>(null);
+  const [sync, setSync] = useState<CanvasSync | null>(null);
   const agent = useAgent();
 
   const handleMount = useCallback((ed: Editor) => {
@@ -24,18 +26,20 @@ export function App() {
     // Only init once
     if (syncRef.current) return;
 
-    const sync = new CanvasSync(editor, agent.sendMsg);
-    sync.init(agent.canvasState.snapshot, agent.canvasState.shapeToFile, agent.canvasState.files);
-    syncRef.current = sync;
+    const s = new CanvasSync(editor, agent.sendMsg);
+    s.init(agent.canvasState.snapshot, agent.canvasState.shapeToFile, agent.canvasState.files);
+    syncRef.current = s;
+    setSync(s);
 
     // Wire up FS change handler
     agent.onCanvasFSChange.current = (changes) => {
-      sync.handleFSChanges(changes);
+      s.handleFSChanges(changes);
     };
 
     return () => {
-      sync.dispose();
+      s.dispose();
       syncRef.current = null;
+      setSync(null);
       agent.onCanvasFSChange.current = null;
     };
   }, [editor, agent.canvasState, agent.sendMsg, agent.onCanvasFSChange]);
@@ -91,6 +95,66 @@ export function App() {
     };
   }, [editor, agent.sendMsg, agent.onScreenshotRequest, agent]);
 
+  // Track canvas selection for agent context
+  const selectionAttachments = useCanvasSelection(editor, sync);
+
+  // Provide getAllCanvasItems for @ mention autocomplete
+  const getCanvasItems = useCallback(() => {
+    return syncRef.current?.getAllCanvasItems() ?? [];
+  }, []);
+
+  // Resolve a canvas item to a full CanvasAttachment (for @ mention)
+  const resolveCanvasItem = useCallback(
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: branching per shape type
+    (shapeId: string, path: string) => {
+      if (!(editor && syncRef.current)) return null;
+      const shape = editor.getShape(shapeId as import("tldraw").TLShapeId);
+      if (!shape) return null;
+
+      if (shape.type === "named_text") {
+        const props = shape.props as { name: string; text: string };
+        return {
+          shapeId,
+          path,
+          type: "text" as const,
+          name: `${props.name}.txt`,
+          content: props.text,
+        };
+      }
+      if (shape.type === "image") {
+        const name = path.split("/").pop() ?? path;
+        return { shapeId, path, type: "image" as const, name };
+      }
+      if (shape.type === "frame") {
+        const props = shape.props as { name: string };
+        const sync = syncRef.current;
+        const children: import("./canvas/canvas-attachments.js").CanvasAttachment[] = [];
+        const childIds = editor.getSortedChildIdsForParent(shapeId as import("tldraw").TLShapeId);
+        const shapeToFile = sync.getShapeToFile();
+        for (const childId of childIds) {
+          const childPath = shapeToFile.get(childId);
+          if (!childPath) continue;
+          const child = resolveCanvasItem(childId, childPath);
+          if (child) children.push(child);
+        }
+        return {
+          shapeId,
+          path: props.name,
+          type: "frame" as const,
+          name: `${props.name}/`,
+          children,
+        };
+      }
+      return null;
+    },
+    [editor],
+  );
+
+  const canvasContext = useMemo(
+    () => ({ selectionAttachments, getCanvasItems, resolveCanvasItem }),
+    [selectionAttachments, getCanvasItems, resolveCanvasItem],
+  );
+
   return (
     <div className="h-dvh w-full overflow-hidden flex relative">
       {/* Canvas - takes remaining space */}
@@ -118,7 +182,7 @@ export function App() {
         style={{ width: panelOpen ? PANEL_WIDTH : 0 }}
       >
         <div className="h-full bg-background border-l border-border" style={{ width: PANEL_WIDTH }}>
-          <AgentPanel agent={agent} />
+          <AgentPanel agent={agent} canvasContext={canvasContext} />
         </div>
       </div>
     </div>
