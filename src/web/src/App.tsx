@@ -40,6 +40,57 @@ export function App() {
     };
   }, [editor, agent.canvasState, agent.sendMsg, agent.onCanvasFSChange]);
 
+  // Wire up screenshot request handler
+  useEffect(() => {
+    if (!editor) return;
+
+    agent.onScreenshotRequest.current = async (requestId: string) => {
+      try {
+        const shapeIds = [...editor.getCurrentPageShapeIds()];
+        if (shapeIds.length === 0) {
+          agent.sendMsg({
+            type: "screenshot_error",
+            requestId,
+            message: "No shapes on canvas",
+          });
+          return;
+        }
+        const result = await editor.toImage(shapeIds, { format: "png", background: true });
+        if (!result?.blob) throw new Error("Export returned null");
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result as string;
+          // Strip data:image/png;base64, prefix
+          const base64 = dataUrl.split(",")[1];
+          agent.sendMsg({
+            type: "screenshot_response",
+            requestId,
+            data: base64,
+            mimeType: "image/png",
+          });
+        };
+        reader.onerror = () => {
+          agent.sendMsg({
+            type: "screenshot_error",
+            requestId,
+            message: "Failed to read screenshot blob",
+          });
+        };
+        reader.readAsDataURL(result.blob);
+      } catch (err) {
+        agent.sendMsg({
+          type: "screenshot_error",
+          requestId,
+          message: err instanceof Error ? err.message : "Screenshot failed",
+        });
+      }
+    };
+
+    return () => {
+      agent.onScreenshotRequest.current = null;
+    };
+  }, [editor, agent.sendMsg, agent.onScreenshotRequest, agent]);
+
   return (
     <div className="h-screen w-screen overflow-hidden flex relative">
       {/* Canvas - takes remaining space */}

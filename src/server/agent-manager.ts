@@ -9,6 +9,7 @@ import {
   ModelRegistry,
   type SessionInfo as PiSessionInfo,
   SessionManager,
+  type ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
 import type {
   Attachment,
@@ -18,6 +19,12 @@ import type {
   StreamDelta,
   ThinkingLevel,
 } from "../shared/protocol.js";
+import type { CanvasFS } from "./canvas-fs.js";
+import {
+  CANVAS_FS_SYSTEM_PROMPT,
+  createCanvasTools,
+  type ScreenshotCallback,
+} from "./canvas-tools.js";
 
 type EventHandler = (sessionId: string, delta: StreamDelta) => void;
 type SessionStateHandler = (sessionId: string, isStreaming: boolean, title?: string) => void;
@@ -35,14 +42,22 @@ export class AgentManager {
   private onStreamDelta: EventHandler;
   private onSessionStateChange: SessionStateHandler;
   private modelRegistry: ModelRegistry;
+  private canvasTools: ToolDefinition[];
 
-  constructor(cwd: string, onStreamDelta: EventHandler, onSessionStateChange: SessionStateHandler) {
+  constructor(
+    cwd: string,
+    onStreamDelta: EventHandler,
+    onSessionStateChange: SessionStateHandler,
+    canvasFS?: CanvasFS,
+    screenshotCallback?: ScreenshotCallback,
+  ) {
     this.cwd = cwd;
     this.onStreamDelta = onStreamDelta;
     this.onSessionStateChange = onSessionStateChange;
     const agentDir = join(homedir(), ".pi", "agent");
     const authStorage = new AuthStorage(join(agentDir, "auth.json"));
     this.modelRegistry = new ModelRegistry(authStorage, join(agentDir, "models.json"));
+    this.canvasTools = canvasFS ? createCanvasTools(canvasFS, screenshotCallback) : [];
   }
 
   async createSession(): Promise<{
@@ -55,7 +70,10 @@ export class AgentManager {
       cwd: this.cwd,
       // biome-ignore lint/suspicious/noExplicitAny: pi SDK model ID type is not exported
       model: getModel("openrouter", "anthropic/claude-opus-4.6" as any),
+      customTools: this.canvasTools,
     });
+
+    this.injectCanvasSystemPrompt(session);
 
     const sessionId = session.sessionId;
     const unsub = this.subscribeToSession(sessionId, session);
@@ -99,7 +117,10 @@ export class AgentManager {
     const { session } = await createAgentSession({
       cwd: this.cwd,
       sessionManager: SessionManager.open(piSessionInfo.path),
+      customTools: this.canvasTools,
     });
+
+    this.injectCanvasSystemPrompt(session);
 
     const sessionId = session.sessionId;
     const unsub = this.subscribeToSession(sessionId, session);
@@ -247,6 +268,12 @@ export class AgentManager {
   }
 
   // -- Private --
+
+  private injectCanvasSystemPrompt(session: AgentSession): void {
+    if (this.canvasTools.length === 0) return;
+    const currentPrompt = session.systemPrompt;
+    session.agent.setSystemPrompt(`${currentPrompt}\n${CANVAS_FS_SYSTEM_PROMPT}`);
+  }
 
   private subscribeToSession(sessionId: string, session: AgentSession): () => void {
     return session.subscribe((event: AgentSessionEvent) => {

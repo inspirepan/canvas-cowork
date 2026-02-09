@@ -106,6 +106,7 @@ export interface UseAgentReturn {
   sendMsg: (msg: ClientMessage) => void;
   canvasState: CanvasInitialState | null;
   onCanvasFSChange: React.MutableRefObject<((changes: CanvasFSEvent[]) => void) | null>;
+  onScreenshotRequest: React.MutableRefObject<((requestId: string) => void) | null>;
 }
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: message serialization with multiple role/type branches
@@ -182,6 +183,7 @@ export function useAgent(): UseAgentReturn {
 
   const [canvasState, setCanvasState] = useState<CanvasInitialState | null>(null);
   const canvasFSChangeRef = useRef<((changes: CanvasFSEvent[]) => void) | null>(null);
+  const screenshotRequestRef = useRef<((requestId: string) => void) | null>(null);
 
   const pendingPromptRef = useRef<{
     text: string;
@@ -619,6 +621,10 @@ export function useAgent(): UseAgentReturn {
           });
           break;
 
+        case "screenshot_request":
+          screenshotRequestRef.current?.(msg.requestId);
+          break;
+
         case "error":
           break;
       }
@@ -787,5 +793,6 @@ export function useAgent(): UseAgentReturn {
     sendMsg,
     canvasState,
     onCanvasFSChange: canvasFSChangeRef,
+    onScreenshotRequest: screenshotRequestRef,
   };
 }

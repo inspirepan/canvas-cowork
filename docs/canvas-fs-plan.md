@@ -33,6 +33,7 @@ Phase 3: Custom Shapes + Tool Restriction (NamedText, Frame rules) [DONE]
 Phase 4: Bidirectional Sync (canvas <-> filesystem)
 Phase 5: Agent Tools + System Prompt (canvas_snapshot, screenshot)
 Phase 6: Frontend Polish (auto-layout, frame resize, smooth transitions)
+Phase 7: Canvas Reference + Selection as Agent Context
 ```
 
 ---
@@ -500,6 +501,167 @@ For the annotated image feature:
 
 ---
 
+## Phase 7: Canvas Reference + Selection as Agent Context
+
+**Goal**: Allow users to reference canvas content (via box-selection or `@` mention) as attachments to agent input, giving the agent spatial context about what the user is focusing on.
+
+### 7.1 Box-selection as live attachment
+
+When the user box-selects (or click-selects) shapes on the canvas, the selected content is **synchronously** attached to the AgentPanel input as context. This is a live binding -- when the selection changes or is cleared, the attachment updates or is removed accordingly.
+
+**Behavior**:
+
+- User selects shapes on canvas -> AgentPanel input area shows attachment chips (e.g., "brief.txt", "refs/style.png", "refs/ (frame)")
+- User clears selection (click empty area, Escape) -> attachment chips are removed
+- User modifies selection (add/remove shapes) -> attachment chips update in real-time
+- Attachment chips are visual-only indicators; the actual content is injected into the message at send time
+
+**What gets attached per shape type**:
+
+| Shape Type | Attachment Content | Display Chip |
+|---|---|---|
+| NamedText | Text content + path | `brief.txt` |
+| Image | Image data (base64) + path | `style.png` |
+| Frame | All children content + path | `refs/` (frame) |
+| Arrow | Ignored (not directly referenceable) | -- |
+| Draw | Ignored | -- |
+
+**Message format** when sent to agent:
+
+```
+User attached 2 items from canvas:
+
+<doc path="brief.txt">
+This is the design brief for the project...
+</doc>
+
+<doc path="refs/style.png" type="image">
+[image data included as ImageContent]
+</doc>
+
+---
+User message: Please review these and suggest improvements.
+```
+
+For frames, recursively include all children:
+
+```
+<doc path="refs/" type="frame">
+  <doc path="refs/style.png" type="image">[image data]</doc>
+  <doc path="refs/notes.txt">Notes content here...</doc>
+</doc>
+```
+
+### 7.2 Selection state sync
+
+Listen to tldraw's `editor.getSelectedShapeIds()` via `editor.store.listen()` or `useValue()` to track selection changes:
+
+```typescript
+// In CanvasEditor or a dedicated hook
+const selectedIds = editor.getSelectedShapeIds()
+
+// Map selected shape IDs to canvas paths via shapeToFile mapping
+// Pass the resolved attachments to AgentPanel
+```
+
+**Key design points**:
+
+- Selection tracking runs on the frontend only (no WS round-trip needed)
+- Use the `shapeToFile` mapping from `.canvas.json` / sync layer to resolve paths
+- For NamedText: read `text` prop directly from tldraw store (no need to read filesystem)
+- For images: use the asset URL from tldraw store, or read from `canvas/` path
+- For frames: collect all child shapes recursively
+
+### 7.3 AgentPanel attachment UI
+
+Add an attachment area between the input box and send button in AgentPanel:
+
+```
++----------------------------------+
+| [brief.txt] [style.png] [refs/] |  <-- attachment chips (from selection)
++----------------------------------+
+| Type your message...        [>]  |  <-- input area
++----------------------------------+
+```
+
+**Attachment chip behavior**:
+
+- Show file icon + name (truncated if long)
+- Chip style: small pill/tag, muted background
+- Click chip to dismiss (manually remove from selection context -- does NOT deselect on canvas)
+- Chips auto-appear/disappear as canvas selection changes
+- When user manually dismisses a chip, that shape is excluded even if still selected on canvas (until next selection change)
+
+### 7.4 `@` mention to reference canvas content
+
+In the AgentPanel input, support `@` to trigger an autocomplete menu listing canvas content:
+
+**Trigger**: User types `@` in the input box.
+
+**Autocomplete menu content**:
+
+- All NamedText shapes (by name, e.g., `@brief`)
+- All Image shapes (by name, e.g., `@style.png`)
+- All Frame shapes (by name, e.g., `@refs/`)
+- Sort by: frames first, then alphabetical within each type
+
+**Menu behavior**:
+
+- Fuzzy search: typing `@br` filters to `brief.txt`
+- Arrow keys to navigate, Enter/click to select
+- Escape to dismiss
+- Selected reference inserts a styled token in the input (similar to Slack/Notion mentions)
+
+**After selection**:
+
+- A reference token appears inline in the input text (e.g., `[@brief.txt]`)
+- The token is visually distinct (background color, non-editable inline)
+- At send time, referenced content is resolved and injected into the message in the same `<doc>` format as box-selection attachments
+- `@` references are **persistent** (unlike box-selection, they don't disappear when canvas selection changes)
+
+### 7.5 Message construction
+
+When the user sends a message with attachments (from either selection or `@` mention), construct the full message:
+
+```typescript
+interface CanvasAttachment {
+  path: string          // relative to canvas/, e.g., "refs/style.png"
+  type: "text" | "image" | "frame"
+  content: string       // text content or base64 image data
+  children?: CanvasAttachment[]  // for frames
+}
+
+function buildMessageWithAttachments(
+  userMessage: string,
+  attachments: CanvasAttachment[]
+): string {
+  if (attachments.length === 0) return userMessage;
+
+  const header = `User attached ${attachments.length} item(s) from canvas:\n\n`;
+  const docs = attachments.map(a => formatAttachment(a)).join("\n\n");
+  return `${header}${docs}\n\n---\n${userMessage}`;
+}
+
+function formatAttachment(a: CanvasAttachment): string {
+  if (a.type === "frame") {
+    const children = a.children?.map(c => formatAttachment(c)).join("\n") ?? "";
+    return `<doc path="${a.path}" type="frame">\n${children}\n</doc>`;
+  }
+  if (a.type === "image") {
+    return `<doc path="${a.path}" type="image">[image attached]</doc>`;
+  }
+  return `<doc path="${a.path}">\n${a.content}\n</doc>`;
+}
+```
+
+Images are sent as separate `ImageContent` blocks in the agent message (not inline base64 in the text), with a path annotation.
+
+### 7.6 Deduplication
+
+If the same shape is referenced by both box-selection and `@` mention, deduplicate at send time. `@` mention takes priority (explicit user intent).
+
+---
+
 ## Technical Risks and Mitigations
 
 | Risk | Impact | Mitigation |
@@ -511,6 +673,9 @@ For the annotated image feature:
 | Agent rapid file edits | Flood of canvas updates | Debounce FS events; batch canvas updates |
 | tldraw `toImage()` for screenshots | Requires browser context | Screenshot tool needs WS round-trip to frontend |
 | Frame nesting prevention | tldraw natively allows nested frames | Override `canReceiveNewChildrenOfType` on FrameShapeUtil |
+| Large selection attachment | Selecting many shapes or large images floods agent context | Limit total attachment size; truncate text content beyond threshold; warn user |
+| Selection flicker | Rapid selection changes cause UI thrashing in attachment chips | Debounce selection state updates (100-200ms) |
+| `@` mention stale references | Shape renamed/deleted after `@` mention but before send | Resolve references at send time, not at insertion time; show warning if reference is invalid |
 
 ---
 
@@ -548,6 +713,11 @@ src/
         canvas-tools.ts        # NEW: tool/shape restriction config
         canvas-sync.ts         # NEW: bidirectional sync logic (canvas <-> WS <-> FS)
         layout.ts              # NEW: auto-layout calculations
+      hooks/
+        useCanvasSelection.ts  # NEW: track selection -> resolve to CanvasAttachment[]
+      canvas/
+        canvas-attachments.ts  # NEW: buildMessageWithAttachments(), formatAttachment()
+        canvas-mention.ts      # NEW: @ mention autocomplete logic (fuzzy search, menu state)
 ```
 
 ---
@@ -762,3 +932,52 @@ src/
 - [ ] Add smooth reparent animation (shape moves from one frame to another)
 - [ ] Implement arrow semantic boundary detection (distinguish: arrows/draws on images, arrows between elements, floating arrows/draws)
 - [ ] End-to-end verification: full flow test (user creates canvas content -> chat with agent -> agent modifies canvas -> user sees real-time changes)
+
+---
+
+### Phase 7: Canvas Reference + Selection as Agent Context
+
+**Run requirement**: After `bun run dev`, selecting shapes on canvas shows attachment chips in AgentPanel input. Typing `@` in input opens autocomplete for canvas content. Sending a message with attachments wraps referenced content in `<doc>` format.
+
+**Verification -- Box-selection attachment**:
+1. Select a NamedText on canvas -- confirm attachment chip (e.g., "brief.txt") appears in AgentPanel input area
+2. Multi-select (Shift+click or box-select) a NamedText and an Image -- confirm two chips appear
+3. Click on empty canvas area to deselect -- confirm all chips disappear
+4. Select a Frame -- confirm chip shows frame name (e.g., "refs/"), and at send time all frame children content is included
+5. Select an Arrow or Draw shape only -- confirm no chip appears (arrows/draws are not referenceable)
+6. Click the X on a chip to dismiss it -- confirm chip disappears but shape remains selected on canvas
+7. After dismissing a chip, change selection then re-select the same shape -- confirm chip reappears
+
+**Verification -- `@` mention**:
+8. Type `@` in AgentPanel input -- confirm autocomplete menu appears listing all canvas shapes
+9. Type `@br` -- confirm menu filters to items matching "br" (e.g., "brief.txt")
+10. Use arrow keys to navigate menu, press Enter -- confirm reference token `[@brief.txt]` inserts into input
+11. Press Escape -- confirm menu closes without inserting anything
+12. Click a menu item -- confirm reference token inserts
+13. Delete the reference token (backspace) -- confirm it's fully removed (not partially editable)
+
+**Verification -- Message construction**:
+14. Select a NamedText (named "hello", content "world"), type "review this", send -- confirm agent receives message with `<doc path="hello.txt">world</doc>` followed by user text
+15. `@` mention an Image ("style.png"), send -- confirm agent receives image as `ImageContent` block with path annotation
+16. Select a NamedText AND `@` mention the same NamedText -- confirm deduplication (only one `<doc>` block, not two)
+17. Select a Frame containing 2 files, send -- confirm nested `<doc>` structure for frame and its children
+
+**Verification -- Live sync**:
+18. While shapes are selected, edit the NamedText content on canvas -- confirm attachment resolves to latest content at send time (not stale)
+19. While shapes are selected, another shape is deleted externally -- confirm chip for deleted shape is removed
+
+**Tasks**:
+- [ ] Create `useCanvasSelection` hook: listen to `editor.getSelectedShapeIds()`, resolve to `CanvasAttachment[]` via shapeToFile mapping
+- [ ] Filter selection to referenceable types only (NamedText, Image, Frame; exclude Arrow, Draw)
+- [ ] Resolve Frame attachments: recursively collect children content
+- [ ] Add attachment chips UI area in AgentPanel (above input, pill/tag style)
+- [ ] Implement chip dismiss (click X to exclude shape from context)
+- [ ] Implement live sync: chips update as selection changes on canvas
+- [ ] Create `@` mention autocomplete: trigger on `@` in input, list all canvas shapes
+- [ ] Implement fuzzy search filtering in autocomplete menu
+- [ ] Implement keyboard navigation (arrow keys, Enter, Escape) for autocomplete
+- [ ] Insert styled reference token in input on selection
+- [ ] Implement `buildMessageWithAttachments()`: construct `<doc>` wrapped message from attachments
+- [ ] Handle Image attachments as `ImageContent` blocks (not inline base64)
+- [ ] Implement deduplication: merge box-selection and `@` mention references at send time
+- [ ] Integrate with AgentPanel send flow: inject attachments into user message before sending to agent

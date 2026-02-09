@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import type { ClientMessage, ServerMessage, StreamDelta } from "../shared/protocol.js";
 import { AgentManager } from "./agent-manager.js";
 import { CanvasFS } from "./canvas-fs.js";
+import type { ScreenshotCallback } from "./canvas-tools.js";
 
 const PORT = Number.parseInt(process.env.PORT || "3000", 10);
 const cwd = process.env.CWD || process.cwd();
@@ -33,6 +34,38 @@ canvasFS.start((event) => {
   broadcast({ type: "canvas_fs_change", changes: [event] });
 });
 
+// Screenshot request/response infrastructure
+const pendingScreenshots = new Map<
+  string,
+  { resolve: (v: { data: string; mimeType: string } | null) => void; timer: Timer }
+>();
+
+const screenshotCallback: ScreenshotCallback = (signal) => {
+  return new Promise((resolve) => {
+    if (clients.size === 0) {
+      resolve(null);
+      return;
+    }
+
+    const requestId = crypto.randomUUID();
+    const timer = setTimeout(() => {
+      pendingScreenshots.delete(requestId);
+      resolve(null);
+    }, 10000);
+
+    if (signal) {
+      signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        pendingScreenshots.delete(requestId);
+        resolve(null);
+      });
+    }
+
+    pendingScreenshots.set(requestId, { resolve, timer });
+    broadcast({ type: "screenshot_request", requestId });
+  });
+};
+
 const manager = new AgentManager(
   cwd,
   (sessionId: string, delta: StreamDelta) => {
@@ -41,6 +74,8 @@ const manager = new AgentManager(
   (sessionId: string, isStreaming: boolean, title?: string) => {
     broadcast({ type: "session_updated", sessionId, isStreaming, title });
   },
+  canvasFS,
+  screenshotCallback,
 );
 
 async function handleMessage(ws: WS, raw: string) {
@@ -210,6 +245,26 @@ async function handleMessage(ws: WS, raw: string) {
           tldraw: msg.snapshot,
           shapeToFile: msg.shapeToFile,
         });
+        break;
+      }
+
+      case "screenshot_response": {
+        const pending = pendingScreenshots.get(msg.requestId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          pendingScreenshots.delete(msg.requestId);
+          pending.resolve({ data: msg.data, mimeType: msg.mimeType });
+        }
+        break;
+      }
+
+      case "screenshot_error": {
+        const pending = pendingScreenshots.get(msg.requestId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          pendingScreenshots.delete(msg.requestId);
+          pending.resolve(null);
+        }
         break;
       }
     }

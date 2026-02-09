@@ -191,6 +191,17 @@ export type ClientMessage =
       type: "canvas_save";
       snapshot: Record<string, unknown>;
       shapeToFile: Record<string, string>;
+    }
+  | {
+      type: "screenshot_response";
+      requestId: string;
+      data: string; // base64
+      mimeType: string;
+    }
+  | {
+      type: "screenshot_error";
+      requestId: string;
+      message: string;
     };
 
 // -- Server -> Client messages --
@@ -241,4 +252,5 @@ export type ServerMessage =
       shapeToFile: Record<string, string>;
       files: CanvasFileEntry[];
     }
+  | { type: "screenshot_request"; requestId: string }
   | { type: "error"; sessionId?: string; message: string };
