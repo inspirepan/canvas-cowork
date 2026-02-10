@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { compressImage } from "./agent-manager.js";
 import type { CanvasFS, CanvasJsonData } from "./canvas-fs.js";
 
@@ -246,11 +246,14 @@ When using multiple reference images:
       // Build output path (supports subdirectory paths like "folder/image.png")
       let filename = params.name;
       if (!/\.\w+$/.test(filename)) filename += ".png";
-      const outputPath = join(canvasDir, filename);
-      const outputDir = dirname(outputPath);
+      const rawOutputPath = join(canvasDir, filename);
+      const outputDir = dirname(rawOutputPath);
       if (!existsSync(outputDir)) {
         mkdirSync(outputDir, { recursive: true });
       }
+      const outputPath = resolveFilenameConflict(rawOutputPath);
+      // Update filename to reflect the resolved path (may include sequence number)
+      filename = outputPath.slice(canvasDir.length + 1);
 
       // Save prompt file before calling the model for traceability
       const PROMPT_FILE_THRESHOLD = 200;
@@ -343,6 +346,26 @@ When using multiple reference images:
   };
 }
 
+// -- Filename conflict resolution --
+
+/** If `filePath` already exists, append a sequence number before the extension: foo.png -> foo-2.png -> foo-3.png */
+function resolveFilenameConflict(filePath: string): string {
+  if (!existsSync(filePath)) return filePath;
+
+  const dir = dirname(filePath);
+  const ext = extname(filePath);
+  const base = basename(filePath, ext);
+
+  let seq = 2;
+  let candidate: string;
+  do {
+    candidate = join(dir, `${base}-${seq}${ext}`);
+    seq++;
+  } while (existsSync(candidate));
+
+  return candidate;
+}
+
 // -- Prompt file persistence --
 
 function savePromptFile(canvasDir: string, content: string, associatedFile?: string): string | null {
@@ -356,13 +379,14 @@ function savePromptFile(canvasDir: string, content: string, associatedFile?: str
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
       filename = `prompt-${timestamp}.txt`;
     }
-    const filePath = join(canvasDir, filename);
-    const fileDir = dirname(filePath);
+    const rawFilePath = join(canvasDir, filename);
+    const fileDir = dirname(rawFilePath);
     if (!existsSync(fileDir)) {
       mkdirSync(fileDir, { recursive: true });
     }
+    const filePath = resolveFilenameConflict(rawFilePath);
     writeFileSync(filePath, content, "utf-8");
-    return `canvas/${filename}`;
+    return `canvas/${filePath.slice(canvasDir.length + 1)}`;
   } catch {
     return null;
   }
