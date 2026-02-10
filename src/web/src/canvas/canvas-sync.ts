@@ -406,6 +406,11 @@ export class CanvasSync {
 
     this.clampLargeImagesOnLoad();
 
+    // Fit viewport to show all content after initial load
+    requestAnimationFrame(() => {
+      this.editor.zoomToFit({ animation: { duration: 300 } });
+    });
+
     this.startListening();
   }
 
@@ -939,6 +944,17 @@ export class CanvasSync {
       this.applyKnownEvent(change);
     }
 
+    // Zoom to fit after folder create/delete so the new layout is fully visible
+    const hasDirChange = changes.some(
+      (c) => c.isDirectory && (c.action === "created" || c.action === "deleted"),
+    );
+    if (hasDirChange) {
+      const delay = Math.max(FADE_IN_DURATION, FADE_OUT_DURATION) + 100;
+      setTimeout(() => {
+        this.editor.zoomToFit({ animation: { duration: 300 } });
+      }, delay);
+    }
+
     this.scheduleSave();
   }
 
@@ -966,7 +982,12 @@ export class CanvasSync {
       // Determine new parent
       const newDir = pathToDir(createEvent.path);
       const newParentId = newDir ? this.getFrameShapeId(newDir) : null;
-      const newPos = newParentId ? this.findPositionInFrame(newParentId) : this.findOpenPosition();
+      const shapeBounds = oldPageBounds
+        ? { w: oldPageBounds.w, h: oldPageBounds.h }
+        : { w: DEFAULT_WIDTH, h: 60 };
+      const newPos = newParentId
+        ? this.findPositionInFrame(newParentId)
+        : this.findOpenPosition(shapeBounds.w, shapeBounds.h);
 
       // Update mapping
       this.fileToShape.delete(deleteEvent.path);
@@ -1062,7 +1083,7 @@ export class CanvasSync {
     if (event.isDirectory) {
       const name = pathToName(event.path);
       const id = createShapeId();
-      const pos = this.findOpenPosition();
+      const pos = this.findOpenPosition(DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT);
       this.editor.createShape({
         id,
         type: "frame",
@@ -1294,7 +1315,7 @@ export class CanvasSync {
         if (dir.path.includes("/")) continue;
 
         const id = createShapeId();
-        const pos = this.findOpenPosition();
+        const pos = this.findOpenPosition(DEFAULT_FRAME_WIDTH, DEFAULT_FRAME_HEIGHT);
         this.editor.createShape({
           id,
           type: "frame",
@@ -1460,7 +1481,7 @@ export class CanvasSync {
     return null;
   }
 
-  private findOpenPosition(): { x: number; y: number } {
+  private findOpenPosition(width = DEFAULT_WIDTH, height = 60): { x: number; y: number } {
     // Collect page-level bounds of all top-level shapes
     const shapeBounds: { x: number; y: number; w: number; h: number }[] = [];
     for (const id of this.editor.getCurrentPageShapeIds()) {
@@ -1479,50 +1500,32 @@ export class CanvasSync {
       try {
         const center = this.editor.getViewportScreenCenter();
         const pagePoint = this.editor.screenToPage(center);
-        return { x: Math.round(pagePoint.x - DEFAULT_WIDTH / 2), y: Math.round(pagePoint.y) };
+        return { x: Math.round(pagePoint.x - width / 2), y: Math.round(pagePoint.y) };
       } catch {
         return { x: 100, y: 100 };
       }
     }
 
-    // Try placing near viewport center first
-    try {
-      const center = this.editor.getViewportScreenCenter();
-      const pageCenter = this.editor.screenToPage(center);
-      const candidate = {
-        x: Math.round(pageCenter.x - DEFAULT_WIDTH / 2),
-        y: Math.round(pageCenter.y),
-      };
-      if (!this.overlapsAny(candidate.x, candidate.y, DEFAULT_WIDTH, 60, shapeBounds)) {
-        return candidate;
-      }
-    } catch {
-      // fallback below
-    }
-
-    // Find a column-based layout position: place in the first column that has space
-    // Sort existing shapes by x to find columns
-    let maxY = 0;
-    let columnX = 100;
-    for (const b of shapeBounds) {
-      const bottom = b.y + b.h;
-      if (bottom > maxY) {
-        maxY = bottom;
-        columnX = b.x;
-      }
-    }
-
-    const candidate = { x: columnX, y: maxY + SHAPE_SPACING };
-    if (!this.overlapsAny(candidate.x, candidate.y, DEFAULT_WIDTH, 60, shapeBounds)) {
-      return candidate;
-    }
-
-    // Last resort: place to the right of all existing shapes
+    // Horizontal layout: place to the right of the rightmost shape, aligned to the top
+    const topY = Math.min(...shapeBounds.map((b) => b.y));
     let maxRight = 0;
     for (const b of shapeBounds) {
       maxRight = Math.max(maxRight, b.x + b.w);
     }
-    return { x: maxRight + SHAPE_SPACING * 2, y: shapeBounds[0]?.y ?? 100 };
+    const candidate = { x: maxRight + SHAPE_SPACING * 2, y: topY };
+    if (!this.overlapsAny(candidate.x, candidate.y, width, height, shapeBounds)) {
+      return candidate;
+    }
+
+    // Fallback: scan right until we find a non-overlapping position
+    let x = candidate.x;
+    for (let i = 0; i < 50; i++) {
+      x += SHAPE_SPACING;
+      if (!this.overlapsAny(x, topY, width, height, shapeBounds)) {
+        return { x, y: topY };
+      }
+    }
+    return candidate;
   }
 
   private overlapsAny(
