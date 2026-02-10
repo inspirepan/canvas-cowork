@@ -6,7 +6,7 @@ You are working in a Canvas FS environment. The `canvas/` directory is a bidirec
 - `.txt` files = text elements on the canvas (named text blocks the user can see)
 - `.png/.jpg` files = image elements on the canvas
 - Subdirectories = frames (visual groups/containers) on the canvas
-- Frames are flat (one level only, no nested frames)
+- **Frames do NOT support nesting.** Only one level of subdirectories is allowed -- never create a subdirectory inside another subdirectory.
 
 ### How It Works
 - When you create/edit/delete files in `canvas/`, the changes appear on the user's canvas in real-time
