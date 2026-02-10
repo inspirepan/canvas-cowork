@@ -1,4 +1,4 @@
-import { PanelRightClose, PanelRightOpen } from "lucide-react";
+import { Grid2x2, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Editor } from "tldraw";
 import { CanvasSync } from "./canvas/canvas-sync.js";
@@ -168,6 +168,10 @@ export function App() {
     [],
   );
 
+  const handleOrganize = useCallback(() => {
+    syncRef.current?.organizeCanvas();
+  }, []);
+
   const canvasContext = useMemo(
     () => ({ selectionAttachments, getCanvasItems, resolveCanvasItem, addImageToCanvas }),
     [selectionAttachments, getCanvasItems, resolveCanvasItem, addImageToCanvas],
@@ -177,9 +181,20 @@ export function App() {
     <div className="h-dvh w-full overflow-hidden flex relative">
       {/* Canvas - takes remaining space */}
       <div className="h-full flex-1 min-w-0">
-        <CanvasEditor onMount={handleMount} />
+        <CanvasEditor onMount={handleMount} onOrganize={handleOrganize} />
         <OutlinePanel editor={editor} sync={sync} />
       </div>
+
+      {/* Organize canvas button */}
+      <button
+        type="button"
+        onClick={handleOrganize}
+        title="Organize Canvas (Shift+O)"
+        className="fixed bottom-14 z-50 p-1.5 rounded-lg bg-background/80 backdrop-blur border border-border shadow-sm hover:bg-accent transition-all duration-300 ease-in-out"
+        style={{ right: panelOpen ? PANEL_WIDTH + 12 : 12 }}
+      >
+        <Grid2x2 className="h-3.5 w-3.5" />
+      </button>
 
       {/* Panel toggle button - outside tldraw to avoid z-index conflicts */}
       <button

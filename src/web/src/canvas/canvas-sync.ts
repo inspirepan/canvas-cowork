@@ -1597,6 +1597,169 @@ export class CanvasSync {
     return { x: FRAME_INNER_PADDING, y: FRAME_HEADER_OFFSET + rows * cellH };
   }
 
+  // -- Organize canvas --
+
+  organizeCanvas(): void {
+    const pageId = this.editor.getCurrentPageId();
+
+    // Collect top-level shapes (frame, named_text, image only)
+    const topLevelIds: TLShapeId[] = [];
+    for (const id of this.editor.getCurrentPageShapeIds()) {
+      const shape = this.editor.getShape(id);
+      if (!shape || shape.parentId !== pageId) continue;
+      if (shape.type === "frame" || shape.type === "named_text" || shape.type === "image") {
+        topLevelIds.push(shape.id);
+      }
+    }
+
+    if (topLevelIds.length === 0) return;
+
+    // Step 1: Organize children inside each frame, track computed sizes
+    const frameSizes = new Map<TLShapeId, { w: number; h: number }>();
+    for (const id of topLevelIds) {
+      const shape = this.editor.getShape(id);
+      if (shape?.type === "frame") {
+        const size = this.organizeFrameChildren(id);
+        if (size) frameSizes.set(id, size);
+      }
+    }
+
+    // Step 2: Sort top-level shapes: frames first, then text, then images
+    const typeOrder: Record<string, number> = { frame: 0, named_text: 1, image: 2 };
+    topLevelIds.sort((a, b) => {
+      const sa = this.editor.getShape(a);
+      const sb = this.editor.getShape(b);
+      const orderA = typeOrder[sa?.type ?? ""] ?? 3;
+      const orderB = typeOrder[sb?.type ?? ""] ?? 3;
+      if (orderA !== orderB) return orderA - orderB;
+      return this.getShapeSortName(a).localeCompare(this.getShapeSortName(b));
+    });
+
+    // Step 3: Adaptive greedy row packing
+    // Target ~3 items per row by using median width to compute max row width
+    const gap = SHAPE_SPACING * 2;
+
+    // Collect sizes for all shapes
+    const sizes: { id: TLShapeId; type: string; w: number; h: number }[] = [];
+    for (const id of topLevelIds) {
+      const shape = this.editor.getShape(id);
+      if (!shape) continue;
+      const knownSize = frameSizes.get(id);
+      const bounds = knownSize ?? this.editor.getShapePageBounds(id);
+      if (!bounds) continue;
+      sizes.push({ id, type: shape.type, w: bounds.w, h: bounds.h });
+    }
+
+    // Compute max row width from median element width * 3
+    const sortedWidths = sizes.map((s) => s.w).sort((a, b) => a - b);
+    const medianW = sortedWidths[Math.floor(sortedWidths.length / 2)] ?? DEFAULT_WIDTH;
+    const maxRowWidth = medianW * 3 + gap * 2;
+
+    // Greedy row packing
+    const updates: { id: TLShapeId; type: string; x: number; y: number }[] = [];
+    let curX = 0;
+    let curY = 0;
+    let rowMaxHeight = 0;
+
+    for (const item of sizes) {
+      if (curX > 0 && curX + item.w > maxRowWidth) {
+        curX = 0;
+        curY += rowMaxHeight + gap;
+        rowMaxHeight = 0;
+      }
+      updates.push({ id: item.id, type: item.type, x: curX, y: curY });
+      curX += item.w + gap;
+      rowMaxHeight = Math.max(rowMaxHeight, item.h);
+    }
+
+    // Step 4: Animate to new positions
+    this.editor.animateShapes(updates, { animation: { duration: 300 } });
+
+    // Step 5: Zoom to fit after animation completes
+    setTimeout(() => {
+      this.editor.zoomToFit({ animation: { duration: 300 } });
+    }, 350);
+
+    this.scheduleSave();
+  }
+
+  private organizeFrameChildren(frameId: TLShapeId): { w: number; h: number } | null {
+    const childIds = this.editor.getSortedChildIdsForParent(frameId);
+    if (childIds.length === 0) {
+      const shape = this.editor.getShape(frameId);
+      if (!shape) return null;
+      const props = shape.props as { w: number; h: number };
+      return { w: props.w, h: props.h };
+    }
+
+    // Collect only named_text and image children
+    const children: { id: TLShapeId; type: string; w: number; h: number }[] = [];
+    for (const childId of childIds) {
+      const child = this.editor.getShape(childId);
+      if (!child) continue;
+      if (child.type !== "named_text" && child.type !== "image") continue;
+      const geom = this.editor.getShapeGeometry(childId);
+      const w = geom ? geom.bounds.w : DEFAULT_WIDTH;
+      const h = geom ? geom.bounds.h : 60;
+      children.push({ id: childId, type: child.type, w, h });
+    }
+
+    if (children.length === 0) {
+      const shape = this.editor.getShape(frameId);
+      if (!shape) return null;
+      const props = shape.props as { w: number; h: number };
+      return { w: props.w, h: props.h };
+    }
+
+    const MAX_PER_ROW = 5;
+    let maxW = 0;
+    let maxH = 0;
+    for (const child of children) {
+      maxW = Math.max(maxW, child.w);
+      maxH = Math.max(maxH, child.h);
+    }
+
+    const cellW = maxW + SHAPE_SPACING;
+    const cellH = maxH + SHAPE_SPACING;
+    const effectiveCols = Math.min(children.length, MAX_PER_ROW);
+    const rows = Math.ceil(children.length / MAX_PER_ROW);
+
+    // Update children positions
+    for (let i = 0; i < children.length; i++) {
+      const col = i % MAX_PER_ROW;
+      const row = Math.floor(i / MAX_PER_ROW);
+      this.editor.updateShape({
+        id: children[i].id,
+        type: children[i].type,
+        x: FRAME_INNER_PADDING + col * cellW,
+        y: FRAME_HEADER_OFFSET + row * cellH,
+      });
+    }
+
+    // Compute and set frame size
+    const frameW = Math.max(FRAME_INNER_PADDING * 2 + effectiveCols * cellW - SHAPE_SPACING, 240);
+    const frameH = Math.max(FRAME_HEADER_OFFSET + rows * cellH - SHAPE_SPACING + FRAME_INNER_PADDING, 120);
+    this.editor.updateShape({
+      id: frameId,
+      type: "frame",
+      props: { w: frameW, h: frameH },
+    });
+
+    return { w: frameW, h: frameH };
+  }
+
+  private getShapeSortName(id: TLShapeId): string {
+    const shape = this.editor.getShape(id);
+    if (!shape) return "";
+    if (shape.type === "named_text" || shape.type === "frame") {
+      return (shape.props as { name: string }).name;
+    }
+    if (shape.type === "image") {
+      return this.shapeToFile.get(shape.id)?.split("/").pop() ?? "";
+    }
+    return "";
+  }
+
   // -- Annotation export --
 
   private scheduleAnnotationCheck(): void {

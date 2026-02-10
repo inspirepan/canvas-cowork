@@ -164,3 +164,10 @@ textarea::-webkit-scrollbar {
   left: 12px;
   height: auto;
 }
+
+/* Lighter shadow on tldraw panels to match our components */
+.tldraw-container .tlui-style-panel__wrapper,
+.tldraw-container .tlui-main-toolbar__tools {
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  border: 1px solid var(--border);
+}

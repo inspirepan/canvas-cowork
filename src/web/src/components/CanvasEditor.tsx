@@ -35,6 +35,18 @@ const customOverrides: TLUiOverrides = {
     };
     return tools;
   },
+  actions(_editor, actions) {
+    actions.organize_canvas = {
+      id: "organize_canvas",
+      // biome-ignore lint/suspicious/noExplicitAny: tldraw translation key
+      label: "action.organize-canvas" as any,
+      kbd: "?o",
+      onSelect() {
+        organizeCallback?.();
+      },
+    };
+    return actions;
+  },
 };
 
 const MIME_TO_EXT: Record<string, string> = {
@@ -56,8 +68,9 @@ function generateImageFileName(file: File): string {
   return `image-${mm}${dd}-${hh}${mi}${ss}.${ext}`;
 }
 
-// Module-level editor ref so the upload handler can update asset names
+// Module-level refs so the upload handler and actions can access state
 let editorRef: Editor | null = null;
+let organizeCallback: (() => void) | null = null;
 
 // Upload images to canvas/ directory on the server
 const canvasAssetStore: TLAssetStore = {
@@ -93,16 +106,18 @@ const canvasAssetStore: TLAssetStore = {
 
 interface CanvasEditorProps {
   onMount?: (editor: Editor) => void;
+  onOrganize?: () => void;
 }
 
 const editorOptions = { createTextOnCanvasDoubleClick: false };
 
-export function CanvasEditor({ onMount }: CanvasEditorProps) {
+export function CanvasEditor({ onMount, onOrganize }: CanvasEditorProps) {
   return (
-    <div className="tldraw-container" style={{ width: "100%", height: "100%" }}>
+    <div className="tldraw-container relative" style={{ width: "100%", height: "100%" }}>
       <Tldraw
         onMount={(editor) => {
           editorRef = editor;
+          organizeCallback = onOrganize ?? null;
           // Double-click on canvas creates named_text instead of default text
           editor.on("event", (info: TLEventInfo) => {
             if (
