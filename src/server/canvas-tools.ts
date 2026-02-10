@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { compressImage } from "./agent-manager.js";
 import type { CanvasFS, CanvasJsonData } from "./canvas-fs.js";
 
@@ -143,7 +143,7 @@ When using multiple reference images:
     parameters: Type.Object({
       name: Type.String({
         description:
-          "Output image filename. Use the user's language for the name (e.g. 'sunset-mountains.png' for English, '日落山脉.png' for Chinese). Saved under canvas/.",
+          "Output image path relative to canvas/. Can include a subdirectory for organization (e.g. 'sunset-scene/v2-warm.png' or '日落场景/v2-暖色.png'). Parent directories are created automatically. Always use the same language as the user for naming.",
       }),
       prompt: Type.Optional(
         Type.String({
@@ -243,10 +243,14 @@ When using multiple reference images:
         prompt = `${descriptions.join("\n")}\n\n${prompt}`;
       }
 
-      // Build output path
+      // Build output path (supports subdirectory paths like "folder/image.png")
       let filename = params.name;
       if (!/\.\w+$/.test(filename)) filename += ".png";
       const outputPath = join(canvasDir, filename);
+      const outputDir = dirname(outputPath);
+      if (!existsSync(outputDir)) {
+        mkdirSync(outputDir, { recursive: true });
+      }
 
       // Save prompt file before calling the model for traceability
       const PROMPT_FILE_THRESHOLD = 200;
@@ -345,7 +349,7 @@ function savePromptFile(canvasDir: string, content: string, associatedFile?: str
   try {
     let filename: string;
     if (associatedFile) {
-      // Associate prompt file with the generated image: "sunset.png" -> "sunset-prompt.txt"
+      // Associate prompt file with the generated image: "folder/sunset.png" -> "folder/sunset-prompt.txt"
       const base = associatedFile.replace(/\.\w+$/, "");
       filename = `${base}-prompt.txt`;
     } else {
@@ -353,8 +357,9 @@ function savePromptFile(canvasDir: string, content: string, associatedFile?: str
       filename = `prompt-${timestamp}.txt`;
     }
     const filePath = join(canvasDir, filename);
-    if (!existsSync(canvasDir)) {
-      mkdirSync(canvasDir, { recursive: true });
+    const fileDir = dirname(filePath);
+    if (!existsSync(fileDir)) {
+      mkdirSync(fileDir, { recursive: true });
     }
     writeFileSync(filePath, content, "utf-8");
     return `canvas/${filename}`;
