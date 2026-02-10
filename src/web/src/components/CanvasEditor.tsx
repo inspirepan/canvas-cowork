@@ -71,16 +71,18 @@ const canvasAssetStore: TLAssetStore = {
     const { src } = (await res.json()) as { src: string };
     // Extract final filename from server response (includes dedup suffix)
     const finalName = src.split("/").pop() ?? fileName;
-    // Update asset name to match the actual filename on disk
+    // Update asset name to match the actual filename on disk.
+    // Use setTimeout to run after tldraw finishes processing the upload result,
+    // otherwise tldraw's own asset update overwrites our name change.
     if (editorRef) {
-      queueMicrotask(() => {
+      setTimeout(() => {
         const existing = editorRef?.getAsset(asset.id);
         if (existing?.type === "image") {
           editorRef?.updateAssets([
             { ...existing, props: { ...existing.props, name: finalName } },
           ]);
         }
-      });
+      }, 0);
     }
     return { src };
   },
