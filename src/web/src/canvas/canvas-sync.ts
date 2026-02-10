@@ -81,8 +81,8 @@ const SHAPE_SPACING = 20;
 const DEFAULT_WIDTH = 200;
 const DEFAULT_FRAME_WIDTH = 320;
 const DEFAULT_FRAME_HEIGHT = 200;
-const FRAME_INNER_PADDING = 20;
-const FRAME_HEADER_OFFSET = 44; // Space below frame header (32px header + 12px gap)
+const FRAME_INNER_PADDING = 40;
+const FRAME_HEADER_OFFSET = 56; // Space below frame header (32px header + 24px gap)
 const FADE_IN_DURATION = 300;
 const FADE_OUT_DURATION = 200;
 const MAX_IMAGE_DISPLAY_DIM = 480;
@@ -1563,18 +1563,38 @@ export class CanvasSync {
       return { x: FRAME_INNER_PADDING, y: FRAME_HEADER_OFFSET };
     }
 
-    // Stack below existing children with consistent spacing
-    let maxBottom = 0;
+    // Collect bounds of existing children (in frame-local coordinates)
+    const childBounds: { x: number; y: number; w: number; h: number }[] = [];
+    let maxW = DEFAULT_WIDTH;
+    let maxH = 60;
     for (const childId of childIds) {
       const child = this.editor.getShape(childId);
       if (!child) continue;
       const geom = this.editor.getShapeGeometry(childId);
+      const w = geom ? geom.bounds.w : DEFAULT_WIDTH;
       const h = geom ? geom.bounds.h : 60;
-      const bottom = child.y + h;
-      if (bottom > maxBottom) maxBottom = bottom;
+      childBounds.push({ x: child.x, y: child.y, w, h });
+      maxW = Math.max(maxW, w);
+      maxH = Math.max(maxH, h);
     }
 
-    return { x: FRAME_INNER_PADDING, y: maxBottom + SHAPE_SPACING };
+    // Grid layout: max 5 per row, scan until we find a non-overlapping cell
+    const MAX_PER_ROW = 5;
+    const cellW = maxW + SHAPE_SPACING;
+    const cellH = maxH + SHAPE_SPACING;
+    for (let i = 0; i < 100; i++) {
+      const col = i % MAX_PER_ROW;
+      const row = Math.floor(i / MAX_PER_ROW);
+      const x = FRAME_INNER_PADDING + col * cellW;
+      const y = FRAME_HEADER_OFFSET + row * cellH;
+      if (!this.overlapsAny(x, y, maxW, maxH, childBounds)) {
+        return { x, y };
+      }
+    }
+
+    // Fallback: place after last row
+    const rows = Math.ceil(childIds.length / MAX_PER_ROW);
+    return { x: FRAME_INNER_PADDING, y: FRAME_HEADER_OFFSET + rows * cellH };
   }
 
   // -- Annotation export --
