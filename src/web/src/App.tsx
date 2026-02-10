@@ -4,6 +4,7 @@ import type { Editor } from "tldraw";
 import { CanvasSync } from "./canvas/canvas-sync.js";
 import { AgentPanel } from "./components/AgentPanel.js";
 import { CanvasEditor } from "./components/CanvasEditor.js";
+import { OutlinePanel } from "./components/OutlinePanel.js";
 import { useAgent } from "./hooks/use-agent.js";
 import { useCanvasSelection } from "./hooks/useCanvasSelection.js";
 
@@ -177,6 +178,7 @@ export function App() {
       {/* Canvas - takes remaining space */}
       <div className="h-full flex-1 min-w-0">
         <CanvasEditor onMount={handleMount} />
+        <OutlinePanel editor={editor} sync={sync} />
       </div>
 
       {/* Panel toggle button - outside tldraw to avoid z-index conflicts */}

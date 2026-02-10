@@ -152,6 +152,11 @@ textarea::-webkit-scrollbar {
   fill: transparent;
 }
 
+/* Hide top-left menu/page/undo row */
+.tldraw-container .tlui-menu-zone {
+  display: none;
+}
+
 /* Move tldraw style panel to bottom-left */
 .tldraw-container .tlui-layout__top__right {
   position: absolute;
