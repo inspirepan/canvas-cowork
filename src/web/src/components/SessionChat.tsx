@@ -80,25 +80,45 @@ function PiDiffView({ diff }: { diff: string }) {
 
 function ToolArgItem({ name, value }: { name: string; value: unknown }) {
   const valueStr = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  const isLong = valueStr.length > 200;
+  const lines = valueStr.split("\n");
+  const isLong = lines.length > 20;
   const [expanded, setExpanded] = useState(!isLong);
 
-  const displayValue = isLong && !expanded ? `${valueStr.slice(0, 200)}...` : valueStr;
+  const previewText = isLong ? lines.slice(0, 20).join("\n") : valueStr;
+
+  if (isLong) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-1 group text-left"
+        >
+          <ChevronRight
+            className={`h-3 w-3 shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? "rotate-90" : ""}`}
+          />
+          <span className="font-normal text-green-700 dark:text-green-400">{name}</span>
+          {!expanded && (
+            <span className="text-muted-foreground/40 text-[10px] ml-1">{lines.length} lines</span>
+          )}
+        </button>
+        <div className="ml-1 pl-3 border-l-2 border-border/80">
+          <span className="whitespace-pre-wrap break-words block">
+            {expanded ? valueStr : previewText}
+          </span>
+          {!expanded && (
+            <span className="text-muted-foreground/50 text-[10px]">...</span>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-0.5">
       <span className="font-normal text-green-700 dark:text-green-400">{name}:</span>
       <span className="whitespace-pre-wrap break-words pl-3 border-l-2 border-border/80 ml-1">
-        {displayValue}
-        {isLong && (
-          <button
-            type="button"
-            onClick={() => setExpanded(!expanded)}
-            className="ml-1 text-muted-foreground hover:text-foreground"
-          >
-            [{expanded ? "collapse" : "expand"}]
-          </button>
-        )}
+        {valueStr}
       </span>
     </div>
   );
