@@ -209,7 +209,7 @@ export function OutlinePanel({
   return (
     <div className="fixed top-3 left-3 z-50 flex items-start gap-2">
       {open && (
-        <div className="min-w-48 max-w-80 max-h-[80vh] bg-background/80 backdrop-blur border border-border rounded-lg shadow-sm flex flex-col overflow-hidden">
+        <div className="min-w-48 max-w-80 max-h-[calc(100vh-340px)] bg-background/80 backdrop-blur border border-border rounded-lg shadow-sm flex flex-col overflow-hidden">
           <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border">
             <Layers className="h-3.5 w-3.5 text-muted-foreground" />
             <span className="text-xs font-medium">Outline</span>
