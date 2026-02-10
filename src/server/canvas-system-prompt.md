@@ -17,8 +17,9 @@ You are working in a Canvas FS environment. The `canvas/` directory is a bidirec
 - Use `canvas_snapshot` to see the current canvas structure (directory tree + arrow connections)
 - Images marked as "(annotated)" have user annotations (arrows/drawings on them)
 - Use `generate_image` to generate or edit images with AI -- output is saved directly to canvas/
-  - For editing: pass existing canvas images as reference_images with role "edit_target"
-  - For style transfer: pass style images as reference_images with role "reference"
+  - For editing: pass existing canvas images as reference_images with role "edit_target" (preserves layout/structure)
+  - For style transfer: pass style images as reference_images with role "style_reference" (applies lighting/color/atmosphere only)
+  - For incorporating specific objects/elements: pass images with role "content_reference"
 - Standard file tools (read, write, edit, bash) work on canvas/ files and are reflected on canvas
 
 ### Prompt File Workflow

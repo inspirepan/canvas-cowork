@@ -130,7 +130,12 @@ function createGenerateImageTool(canvasDir: string): ToolDefinition {
 - For pure generation: provide a text prompt describing the desired image.
 - For editing/composition: provide reference images along with a prompt describing the desired changes.
 - Generated images are saved to the canvas/ directory and appear on the user's canvas.
-- Supports up to 14 input images for multi-image composition.`,
+- Supports up to 14 input images for multi-image composition.
+
+When using multiple reference images:
+- Be explicit about which image controls LAYOUT (spatial arrangement, camera angle, composition) vs STYLE (lighting, color, atmosphere) vs CONTENT (objects, elements to include).
+- Assign each image a distinct role: edit_target for preserving layout/structure, style_reference for visual style only, content_reference for objects/elements.
+- In the prompt, list specific spatial features to preserve (e.g. "water at bottom, buildings at top") rather than abstract instructions like "keep the same layout".`,
     parameters: Type.Object({
       name: Type.String({
         description:
@@ -152,13 +157,25 @@ function createGenerateImageTool(canvasDir: string): ToolDefinition {
         Type.Array(
           Type.Object({
             file_path: Type.String({ description: "Path to the image file" }),
-            role: Type.Union([Type.Literal("reference"), Type.Literal("edit_target")], {
-              description:
-                "'reference': use as style/content reference; 'edit_target': the image to be edited",
-            }),
+            role: Type.Union(
+              [
+                Type.Literal("edit_target"),
+                Type.Literal("style_reference"),
+                Type.Literal("content_reference"),
+              ],
+              {
+                description:
+                  "'edit_target': the base image whose spatial layout, composition, and structure should be preserved in the output; " +
+                  "'style_reference': use for visual style, lighting, color grading, atmosphere only - do NOT replicate its layout; " +
+                  "'content_reference': use for content, objects, or scene elements to incorporate",
+              },
+            ),
             description: Type.String({
               description:
-                'Brief description of what is in the image, e.g. "a product photo of red sneakers on white background", "a watercolor painting of a village with soft pastel tones"',
+                "Describe what this image contributes to the output. " +
+                "Specify clearly: does it provide layout/composition, or style/atmosphere, or specific content elements? " +
+                "Example: 'provides the building layout and camera angle - preserve exact spatial arrangement' " +
+                "or 'provides lighting mood and color palette only - do not copy its composition'",
             }),
           }),
           { description: "Reference/input images with their roles and usage descriptions" },
@@ -178,7 +195,7 @@ function createGenerateImageTool(canvasDir: string): ToolDefinition {
         prompt_file?: string;
         reference_images?: Array<{
           file_path: string;
-          role: "reference" | "edit_target";
+          role: "edit_target" | "style_reference" | "content_reference";
           description: string;
         }>;
         resolution?: "1K" | "2K" | "4K";
@@ -211,7 +228,12 @@ function createGenerateImageTool(canvasDir: string): ToolDefinition {
       // Augment prompt with reference image descriptions
       if (params.reference_images?.length) {
         const descriptions = params.reference_images.map((img, i) => {
-          const roleLabel = img.role === "reference" ? "Reference image" : "Image to edit";
+          const roleLabels: Record<string, string> = {
+            edit_target: "Edit target (preserve layout/structure)",
+            style_reference: "Style reference (lighting/color/atmosphere only)",
+            content_reference: "Content reference (objects/elements to include)",
+          };
+          const roleLabel = roleLabels[img.role] ?? img.role;
           return `[Image ${i + 1} - ${roleLabel}]: ${img.description}`;
         });
         prompt = `${descriptions.join("\n")}\n\n${prompt}`;
@@ -293,7 +315,7 @@ function createGenerateImageTool(canvasDir: string): ToolDefinition {
       if (savedPromptFilePath) {
         resultContent.push({
           type: "text" as const,
-          text: `<system>The image generation prompt has been saved to ${savedPromptFilePath}. For regeneration or iteration, pass this path as prompt_file to avoid re-typing the full prompt. To modify the prompt, use the Edit tool on the file then pass it as prompt_file. If the user wants to iteratively edit the generated image, use the image as a reference_image with role "edit_target" along with the editing instruction.</system>`,
+          text: `<system>The image generation prompt has been saved to ${savedPromptFilePath}. For regeneration or iteration, pass this path as prompt_file to avoid re-typing the full prompt. To modify the prompt, use the Edit tool on the file then pass it as prompt_file. If the user wants to iteratively edit the generated image, use the image as a reference_image with role "edit_target" (to preserve its layout/structure) along with the editing instruction.</system>`,
         });
       } else if (params.prompt_file) {
         resultContent.push({
