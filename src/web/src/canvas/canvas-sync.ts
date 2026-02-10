@@ -1483,37 +1483,51 @@ export class CanvasSync {
 
   private findOpenPosition(width = DEFAULT_WIDTH, height = 60): { x: number; y: number } {
     // Collect page-level bounds of all top-level shapes
-    const shapeBounds: { x: number; y: number; w: number; h: number }[] = [];
+    const allBounds: { x: number; y: number; w: number; h: number }[] = [];
     for (const id of this.editor.getCurrentPageShapeIds()) {
       const shape = this.editor.getShape(id);
       if (!shape) continue;
-      // Only consider top-level shapes (not children of frames)
       if (shape.parentId !== this.editor.getCurrentPageId()) continue;
       const bounds = this.editor.getShapePageBounds(shape);
       if (bounds) {
-        shapeBounds.push({ x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h });
+        allBounds.push({ x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h });
       }
     }
 
-    if (shapeBounds.length === 0) {
-      // Place near viewport center
-      try {
-        const center = this.editor.getViewportScreenCenter();
-        const pagePoint = this.editor.screenToPage(center);
-        return { x: Math.round(pagePoint.x - width / 2), y: Math.round(pagePoint.y) };
-      } catch {
-        return { x: 100, y: 100 };
-      }
+    // Get current viewport in page coordinates
+    let vp: { x: number; y: number; w: number; h: number } | null = null;
+    try {
+      const vpBounds = this.editor.getViewportPageBounds();
+      vp = { x: vpBounds.x, y: vpBounds.y, w: vpBounds.w, h: vpBounds.h };
+    } catch {
+      // ignore
     }
 
-    // Horizontal layout: place to the right of the rightmost shape, aligned to the top
-    const topY = Math.min(...shapeBounds.map((b) => b.y));
+    if (allBounds.length === 0) {
+      if (vp) {
+        return { x: Math.round(vp.x + vp.w / 2 - width / 2), y: Math.round(vp.y + vp.h / 2) };
+      }
+      return { x: 100, y: 100 };
+    }
+
+    // Find shapes visible in the current viewport
+    const visibleBounds = vp
+      ? allBounds.filter(
+          (b) => b.x < vp.x + vp.w && b.x + b.w > vp.x && b.y < vp.y + vp.h && b.y + b.h > vp.y,
+        )
+      : [];
+
+    // Use visible shapes if any, otherwise fall back to all shapes
+    const refBounds = visibleBounds.length > 0 ? visibleBounds : allBounds;
+
+    // Place to the right of the rightmost reference shape, top-aligned
+    const topY = Math.min(...refBounds.map((b) => b.y));
     let maxRight = 0;
-    for (const b of shapeBounds) {
+    for (const b of refBounds) {
       maxRight = Math.max(maxRight, b.x + b.w);
     }
     const candidate = { x: maxRight + SHAPE_SPACING * 2, y: topY };
-    if (!this.overlapsAny(candidate.x, candidate.y, width, height, shapeBounds)) {
+    if (!this.overlapsAny(candidate.x, candidate.y, width, height, allBounds)) {
       return candidate;
     }
 
@@ -1521,7 +1535,7 @@ export class CanvasSync {
     let x = candidate.x;
     for (let i = 0; i < 50; i++) {
       x += SHAPE_SPACING;
-      if (!this.overlapsAny(x, topY, width, height, shapeBounds)) {
+      if (!this.overlapsAny(x, topY, width, height, allBounds)) {
         return { x, y: topY };
       }
     }
