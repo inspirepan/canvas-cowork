@@ -94,9 +94,11 @@ export class CanvasFS {
         const exists = existsSync(absPath);
 
         let isDirectory = false;
+        let stat: ReturnType<typeof statSync> | null = null;
         if (exists) {
           try {
-            isDirectory = statSync(absPath).isDirectory();
+            stat = statSync(absPath);
+            isDirectory = stat.isDirectory();
           } catch {
             // File may have been deleted between check and stat
             return;
@@ -116,6 +118,11 @@ export class CanvasFS {
           isDirectory: exists ? isDirectory : !extname(relPath),
           timestamp: Date.now(),
         };
+
+        if (exists && !isDirectory && stat) {
+          event.size = stat.size;
+          event.mtimeMs = stat.mtimeMs;
+        }
 
         // Include text content for created/modified text files
         if (exists && !isDirectory && (action === "created" || action === "modified")) {
@@ -297,7 +304,12 @@ export class CanvasFS {
       } else {
         const shapeType = fileToShapeType(relPath);
         if (shapeType) {
-          const entry: CanvasFileEntry = { path: relPath, type: shapeType };
+          const entry: CanvasFileEntry = {
+            path: relPath,
+            type: shapeType,
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+          };
           if (shapeType === "named_text") {
             try {
               entry.content = readFileSync(absPath, "utf-8");

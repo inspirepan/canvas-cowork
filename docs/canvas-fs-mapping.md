@@ -80,7 +80,7 @@
 | 文件系统操作 | 画布效果 |
 |---|---|
 | 修改 `.txt` 文件内容 | 更新对应 NamedText 的文本内容 |
-| 修改图片文件 | **不同步**（目前未处理图片内容更新） |
+| 修改图片文件 | 刷新 Image 资源（cache-bust；尺寸异步更新） |
 
 ---
 
@@ -96,7 +96,8 @@
 ### 文件系统 -> 画布
 
 文件系统层面的重命名表现为"删除旧 + 创建新"，由 `detectMoves` 检测：
-- 同名文件（不含目录部分）在不同路径出现时，识别为移动而非删除+创建
+- 同名文件在不同路径出现时，识别为移动
+- 同扩展名且 size+mtime 或内容相同的创建/删除，会识别为移动/改名
 
 ---
 
@@ -120,7 +121,10 @@
 | `mv canvas/note.txt canvas/folder/` | NamedText 重新设置父级到对应 Frame，移动动画 |
 | `mv canvas/folder/note.txt canvas/` | NamedText 移出 Frame 到画布根级，移动动画 |
 
-移动检测逻辑 (`detectMoves`)：在同一批 FS 事件中，如果检测到"删除 A + 创建 B"且文件名相同但路径不同，则识别为移动操作。
+移动检测逻辑 (`detectMoves`)：在同一批 FS 事件中，如果检测到"删除 A + 创建 B"且
+- 文件名相同但路径不同，或
+- 同扩展名且 size+mtime 或内容相同
+则识别为移动操作。
 
 ---
 
@@ -135,13 +139,13 @@
 | 修改图片上的画笔 | 重新导出 `{name}_annotated.png`（800ms 防抖） |
 | 将画笔拖动到图片上方 | 触发 annotation 检查，如果 AABB 重叠则导出 |
 | 将画笔从图片上方移走 | 触发 annotation 检查，不再重叠则删除 `_annotated.png` |
-| 移动图片使其与已有画笔重叠 | **可能不触发**（annotation 检查仅由 draw 变更触发） |
+| 移动/缩放图片使其与已有画笔重叠 | 触发 annotation 检查并导出 |
 
 检测条件：
 - 画笔和图片必须在同一个父级（同一 Frame 或都在根级别）
 - 使用 AABB 重叠检测（`findOverlappingDrawShapes`）
 - 导出时使用 tldraw 的 `getSvgElement` + `getSvgAsImage` 合成带注解的图片
-- **注意**：annotation 检查仅在 draw 形状增删改时触发（`drawShapeChanged`），移动图片本身不会触发
+- **注意**：annotation 检查在 draw 形状增删改 **或** image 位置/尺寸/父级变更时触发
 
 ---
 
@@ -235,7 +239,7 @@
 删除 arrow        --            --
 
 修改 text内容     重写 .txt      更新文字
-修改 image内容    --            --
+修改 image内容    --            刷新 Image 资源
 重命名 text       改文件名       (检测为move)
 重命名 frame      改目录名       (检测为move)
 
@@ -247,7 +251,7 @@
 draw覆盖image     (*) 导出annotated  --
 draw移到image上   (*) 导出annotated  --
 draw移离image     (*) 删annotated    --
-image移到draw下   (*) 不触发!        --
+image移到draw下   (*) 触发 annotation  --
 
 arrow连接两端     (*) snapshot输出    --
 arrow连接image    (*) snapshot标记    --
@@ -265,9 +269,8 @@ arrow重连         (*) snapshot更新    --
 
 当多个形状使用相同名称时（如复制一个 NamedText），文件系统会产生路径冲突。
 
-**当前状态**：尚未实现去重。第二个同名形状会覆盖第一个的文件映射。
-
-**预期行为**：类似文件系统，自动添加数字后缀：`brief.txt` -> `brief-1.txt` -> `brief-2.txt`。需要在创建和重命名操作中检查目标路径是否已被占用。
+**当前状态**：已实现去重。创建/重命名/移动时若路径冲突，自动添加数字后缀：
+`brief.txt` -> `brief-1.txt` -> `brief-2.txt`。
 
 ---
 
@@ -284,10 +287,7 @@ arrow重连         (*) snapshot更新    --
 
 ## 十三、当前限制与已知问题
 
-1. **名称冲突未处理**：同名 NamedText/Frame 会导致文件映射覆盖，需要添加数字后缀去重
-2. **图片内容更新不同步**：FS 端修改图片文件后，画布不会自动刷新图片（因为 tldraw 的 asset 缓存）
-3. **移动图片不触发 annotation 检查**：annotation 检查仅由 draw 形状变更触发，移动图片到画笔下方不会产生 `_annotated.png`
-4. **Arrow 连接不产生 annotated 文件**：Arrow 连接图片只影响 snapshot 标记，不导出 `_annotated.png` 文件（与 Draw 行为不一致）
-5. **Frame 不可嵌套**：`NoNestFrameShapeUtil` 阻止 Frame 嵌套，因此 canvas/ 下目录结构只有一层
-6. **画笔/箭头不产生文件**：它们没有文件映射，跨 Frame 移动只影响 `.canvas.json`
-7. **文件系统重命名检测依赖同名匹配**：如果 `mv` 同时改名，会被识别为"删除+创建"而非"移动"
+1. **Arrow 连接不产生 annotated 文件**：Arrow 连接图片只影响 snapshot 标记，不导出 `_annotated.png` 文件（与 Draw 行为不一致）
+2. **Frame 不可嵌套**：`NoNestFrameShapeUtil` 阻止 Frame 嵌套，因此 canvas/ 下目录结构只有一层
+3. **画笔/箭头不产生文件**：它们没有文件映射，跨 Frame 移动只影响 `.canvas.json`
+4. **文件系统重命名检测仍有歧义**：若 size/mtime/内容不足以唯一匹配，仍会回退为"删除+创建"

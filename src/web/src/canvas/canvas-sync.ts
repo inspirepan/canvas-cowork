@@ -16,6 +16,7 @@ import type {
   CanvasSyncChange,
   ClientMessage,
 } from "../../../shared/protocol.js";
+import { buildCacheBustedSrc, detectMovesEnhanced, ensureUniquePath } from "./canvas-sync-utils.js";
 
 // Shape-to-file path derivation helpers
 function nameToTxtPath(name: string, parentFramePath: string | null): string {
@@ -68,6 +69,13 @@ function loadImageDimensions(src: string): Promise<{ w: number; h: number }> {
   });
 }
 
+interface KnownMeta {
+  size?: number;
+  mtimeMs?: number;
+  content?: string;
+  isDirectory?: boolean;
+}
+
 // Layout constants
 const SHAPE_SPACING = 20;
 const DEFAULT_WIDTH = 200;
@@ -77,14 +85,24 @@ const FRAME_INNER_PADDING = 20;
 const FRAME_HEADER_OFFSET = 44; // Space below frame header (32px header + 12px gap)
 const FADE_IN_DURATION = 300;
 const FADE_OUT_DURATION = 200;
+const MAX_IMAGE_DISPLAY_DIM = 480;
 
 const ANNOTATION_DEBOUNCE_MS = 800;
+
+function scaleImageDisplay(w: number, h: number): { w: number; h: number } {
+  if (w <= 0 || h <= 0) return { w: 300, h: 200 };
+  if (w <= MAX_IMAGE_DISPLAY_DIM && h <= MAX_IMAGE_DISPLAY_DIM) return { w, h };
+  const scale = MAX_IMAGE_DISPLAY_DIM / Math.max(w, h);
+  return { w: Math.round(w * scale), h: Math.round(h * scale) };
+}
 
 export class CanvasSync {
   private editor: Editor;
   private sendMsg: (msg: ClientMessage) => void;
   private shapeToFile = new Map<string, string>(); // shapeId -> relative path
   private fileToShape = new Map<string, string>(); // relative path -> shapeId
+  private knownPaths = new Set<string>();
+  private knownMeta = new Map<string, KnownMeta>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribe: (() => void) | null = null;
   // Shapes pending fade-out deletion (ignore FS events for these)
@@ -173,14 +191,7 @@ export class CanvasSync {
 
     // Get image dimensions from data URL
     const { w, h } = await loadImageDimensions(`data:${mimeType};base64,${base64}`);
-    const maxDim = 600;
-    let displayW = w;
-    let displayH = h;
-    if (w > maxDim || h > maxDim) {
-      const scale = maxDim / Math.max(w, h);
-      displayW = Math.round(w * scale);
-      displayH = Math.round(h * scale);
-    }
+    const { w: displayW, h: displayH } = scaleImageDisplay(w, h);
 
     const assetId = AssetRecordType.createId();
     const shapeId = createShapeId();
@@ -220,7 +231,9 @@ export class CanvasSync {
 
     this.shapeToFile.set(shapeId, path);
     this.fileToShape.set(path, shapeId);
+    this.rememberPath(path, { isDirectory: false });
     this.scheduleSave();
+    this.scheduleAnnotationCheck();
 
     return { shapeId, path };
   }
@@ -231,12 +244,146 @@ export class CanvasSync {
     this.editor.store.mergeRemoteChanges(fn);
   }
 
+  private seedKnownFromFiles(files: CanvasFileEntry[]): void {
+    this.knownPaths.clear();
+    this.knownMeta.clear();
+    for (const file of files) {
+      this.knownPaths.add(file.path);
+      this.knownMeta.set(file.path, {
+        size: file.size,
+        mtimeMs: file.mtimeMs,
+        content: file.content,
+        isDirectory: file.type === "directory",
+      });
+    }
+  }
+
+  private rememberPath(path: string, meta?: KnownMeta): void {
+    this.knownPaths.add(path);
+    if (meta) {
+      const prev = this.knownMeta.get(path) ?? {};
+      this.knownMeta.set(path, { ...prev, ...meta });
+    }
+  }
+
+  private forgetPath(path: string): void {
+    this.knownPaths.delete(path);
+    this.knownMeta.delete(path);
+  }
+
+  private applyKnownEvent(event: CanvasFSEvent): void {
+    if (event.action === "deleted") {
+      this.forgetPath(event.path);
+      return;
+    }
+    this.rememberPath(event.path, {
+      size: event.size,
+      mtimeMs: event.mtimeMs,
+      content: event.content,
+      isDirectory: event.isDirectory,
+    });
+  }
+
+  private updateImageAssetName(shapeId: string, fileName: string): void {
+    const shape = this.editor.getShape(shapeId as TLShapeId);
+    if (!shape || shape.type !== "image") return;
+    const assetId = (shape.props as { assetId?: string }).assetId;
+    if (!assetId) return;
+    const asset = this.editor.getAsset(assetId as TLAssetId);
+    if (!asset || asset.type !== "image") return;
+    if (asset.props.name === fileName) return;
+    this.applyRemote(() => {
+      this.editor.updateAssets([{ ...asset, props: { ...asset.props, name: fileName } }]);
+    });
+  }
+
+  private tryClampImageShape(shapeId: string, assetId: string | null, attempt = 0): void {
+    if (!assetId) return;
+    const shape = this.editor.getShape(shapeId as TLShapeId);
+    if (!shape || shape.type !== "image") return;
+    const asset = this.editor.getAsset(assetId as TLAssetId);
+    if (asset?.type !== "image") {
+      if (attempt < 20) {
+        setTimeout(() => this.tryClampImageShape(shapeId, assetId, attempt + 1), 200);
+      }
+      return;
+    }
+
+    const { w, h } = asset.props as { w: number; h: number };
+    const { w: displayW, h: displayH } = scaleImageDisplay(w, h);
+    const { w: currentW, h: currentH } = shape.props as { w: number; h: number };
+    if (currentW <= displayW && currentH <= displayH) return;
+
+    this.applyRemote(() => {
+      this.editor.updateShape({
+        id: shapeId as TLShapeId,
+        type: "image",
+        props: { w: displayW, h: displayH },
+      });
+    });
+  }
+
+  private clampLargeImagesOnLoad(): void {
+    this.applyRemote(() => {
+      for (const shapeId of this.editor.getCurrentPageShapeIds()) {
+        const shape = this.editor.getShape(shapeId);
+        if (!shape || shape.type !== "image") continue;
+        const assetId = (shape.props as { assetId?: string }).assetId;
+        if (!assetId) continue;
+        const asset = this.editor.getAsset(assetId as TLAssetId);
+        if (!asset || asset.type !== "image") continue;
+        const { w, h } = asset.props as { w: number; h: number };
+        const { w: currentW, h: currentH } = shape.props as { w: number; h: number };
+        if (Math.round(currentW) !== Math.round(w) || Math.round(currentH) !== Math.round(h)) {
+          continue;
+        }
+        const { w: displayW, h: displayH } = scaleImageDisplay(w, h);
+        if (displayW === currentW && displayH === currentH) continue;
+        this.editor.updateShape({
+          id: shapeId as TLShapeId,
+          type: "image",
+          props: { w: displayW, h: displayH },
+        });
+      }
+    });
+  }
+
+  private async refreshImageAsset(
+    shapeId: TLShapeId,
+    relPath: string,
+    mtimeMs?: number,
+  ): Promise<void> {
+    const shape = this.editor.getShape(shapeId as TLShapeId);
+    if (!shape || shape.type !== "image") return;
+    const assetId = (shape.props as { assetId?: string }).assetId;
+    if (!assetId) return;
+    const asset = this.editor.getAsset(assetId as TLAssetId);
+    if (!asset || asset.type !== "image") return;
+
+    const src = buildCacheBustedSrc(relPath, mtimeMs);
+    const { w, h } = await loadImageDimensions(src);
+    this.applyRemote(() => {
+      this.editor.updateAssets([
+        {
+          ...asset,
+          props: {
+            ...asset.props,
+            src,
+            w,
+            h,
+          },
+        },
+      ]);
+    });
+  }
+
   // Initialize from server state
   init(
     snapshot: Record<string, unknown> | null,
     shapeToFile: Record<string, string>,
     files: CanvasFileEntry[],
   ): void {
+    this.seedKnownFromFiles(files);
     if (snapshot) {
       // Restore from saved snapshot
       try {
@@ -256,6 +403,8 @@ export class CanvasSync {
       // No snapshot but files exist: bootstrap canvas from filesystem
       this.bootstrapFromFiles(files);
     }
+
+    this.clampLargeImagesOnLoad();
 
     this.startListening();
   }
@@ -289,6 +438,7 @@ export class CanvasSync {
     const changes: CanvasSyncChange[] = [];
     const { added, updated, removed } = entry.changes;
     let drawShapeChanged = false;
+    let imageShapeChanged = false;
 
     // Handle added shapes
     for (const record of Object.values(added)) {
@@ -297,9 +447,12 @@ export class CanvasSync {
         id: string;
         type: string;
         parentId: string;
+        x: number;
+        y: number;
         props: Record<string, unknown>;
       };
       if (shape.type === "draw") drawShapeChanged = true;
+      if (shape.type === "image") imageShapeChanged = true;
       const change = this.handleShapeCreated(shape);
       if (change) changes.push(change);
     }
@@ -319,15 +472,32 @@ export class CanvasSync {
         id: string;
         type: string;
         parentId: string;
+        x: number;
+        y: number;
         props: Record<string, unknown>;
       };
       const toShape = to as unknown as {
         id: string;
         type: string;
         parentId: string;
+        x: number;
+        y: number;
         props: Record<string, unknown>;
       };
       if (toShape.type === "draw") drawShapeChanged = true;
+      if (toShape.type === "image") {
+        const fromProps = fromShape.props as { w?: number; h?: number };
+        const toProps = toShape.props as { w?: number; h?: number };
+        if (
+          fromShape.parentId !== toShape.parentId ||
+          fromShape.x !== toShape.x ||
+          fromShape.y !== toShape.y ||
+          fromProps.w !== toProps.w ||
+          fromProps.h !== toProps.h
+        ) {
+          imageShapeChanged = true;
+        }
+      }
       const updateChanges = this.handleShapeUpdated(fromShape, toShape);
       changes.push(...updateChanges);
     }
@@ -349,7 +519,7 @@ export class CanvasSync {
     }
 
     // If draw shapes changed, schedule annotation export check
-    if (drawShapeChanged) {
+    if (drawShapeChanged || imageShapeChanged) {
       this.scheduleAnnotationCheck();
     }
   }
@@ -364,22 +534,46 @@ export class CanvasSync {
       const name = (shape.props.name as string) || "untitled";
       const text = (shape.props.text as string) || "";
       const parentPath = this.getFramePath(shape.parentId);
-      const path = nameToTxtPath(name, parentPath);
+      const desiredPath = nameToTxtPath(name, parentPath);
+      const path = ensureUniquePath(desiredPath, this.knownPaths);
+      if (path !== desiredPath) {
+        const dedupedName = pathToName(path);
+        this.applyRemote(() => {
+          this.editor.updateShape({
+            id: shape.id as TLShapeId,
+            type: "named_text",
+            props: { name: dedupedName },
+          });
+        });
+      }
       this.shapeToFile.set(shape.id, path);
       this.fileToShape.set(path, shape.id);
+      this.rememberPath(path, { content: text, isDirectory: false });
       return { action: "create", shapeType: "named_text", path, content: text };
     }
     if (shape.type === "frame") {
       const name = (shape.props.name as string) || "untitled";
-      const path = name;
+      const desiredPath = name;
+      const path = ensureUniquePath(desiredPath, this.knownPaths);
+      if (path !== desiredPath) {
+        this.applyRemote(() => {
+          this.editor.updateShape({
+            id: shape.id as TLShapeId,
+            type: "frame",
+            props: { name: path },
+          });
+        });
+      }
       this.shapeToFile.set(shape.id, path);
       this.fileToShape.set(path, shape.id);
+      this.rememberPath(path, { isDirectory: true });
       return { action: "create", shapeType: "frame", path };
     }
     if (shape.type === "image") {
       // Image was uploaded via assets.upload which already wrote the file.
       // Register the mapping from the asset src URL.
       this.tryRegisterImageMapping(shape.id, shape.props.assetId as string | null);
+      this.tryClampImageShape(shape.id, shape.props.assetId as string | null);
     }
     return null;
   }
@@ -402,10 +596,23 @@ export class CanvasSync {
       // Check for reparenting (moved in/out of frame)
       if (from.parentId !== to.parentId) {
         const newParentPath = this.getFramePath(to.parentId);
-        const newPath = nameToTxtPath(newName, newParentPath);
+        const desiredPath = nameToTxtPath(newName, newParentPath);
+        const newPath = ensureUniquePath(desiredPath, this.knownPaths, oldPath);
+        if (newPath !== desiredPath) {
+          const dedupedName = pathToName(newPath);
+          this.applyRemote(() => {
+            this.editor.updateShape({
+              id: to.id as TLShapeId,
+              type: "named_text",
+              props: { name: dedupedName },
+            });
+          });
+        }
         this.fileToShape.delete(oldPath);
         this.shapeToFile.set(to.id, newPath);
         this.fileToShape.set(newPath, to.id);
+        this.forgetPath(oldPath);
+        this.rememberPath(newPath, { content: newText, isDirectory: false });
         changes.push({
           action: "move",
           shapeType: "named_text",
@@ -418,10 +625,23 @@ export class CanvasSync {
       // Check for rename
       if (oldName !== newName) {
         const parentPath = this.getFramePath(to.parentId);
-        const newPath = nameToTxtPath(newName, parentPath);
+        const desiredPath = nameToTxtPath(newName, parentPath);
+        const newPath = ensureUniquePath(desiredPath, this.knownPaths, oldPath);
+        if (newPath !== desiredPath) {
+          const dedupedName = pathToName(newPath);
+          this.applyRemote(() => {
+            this.editor.updateShape({
+              id: to.id as TLShapeId,
+              type: "named_text",
+              props: { name: dedupedName },
+            });
+          });
+        }
         this.fileToShape.delete(oldPath);
         this.shapeToFile.set(to.id, newPath);
         this.fileToShape.set(newPath, to.id);
+        this.forgetPath(oldPath);
+        this.rememberPath(newPath, { content: newText, isDirectory: false });
         changes.push({
           action: "rename",
           shapeType: "named_text",
@@ -448,10 +668,17 @@ export class CanvasSync {
       if (from.parentId !== to.parentId) {
         const fileName = oldPath.split("/").pop() ?? oldPath;
         const newParentPath = this.getFramePath(to.parentId);
-        const newPath = newParentPath ? `${newParentPath}/${fileName}` : fileName;
+        const desiredPath = newParentPath ? `${newParentPath}/${fileName}` : fileName;
+        const newPath = ensureUniquePath(desiredPath, this.knownPaths, oldPath);
+        const newFileName = newPath.split("/").pop() ?? newPath;
+        if (newFileName !== fileName) {
+          this.updateImageAssetName(to.id, newFileName);
+        }
         this.fileToShape.delete(oldPath);
         this.shapeToFile.set(to.id, newPath);
         this.fileToShape.set(newPath, to.id);
+        this.forgetPath(oldPath);
+        this.rememberPath(newPath, { isDirectory: false });
         changes.push({
           action: "move",
           shapeType: "image",
@@ -479,23 +706,38 @@ export class CanvasSync {
 
       if (oldName !== newName) {
         // Frame renamed -> rename directory and update all children mappings
+        const desiredPath = newName;
+        const uniquePath = ensureUniquePath(desiredPath, this.knownPaths, oldPath);
+        if (uniquePath !== desiredPath) {
+          this.applyRemote(() => {
+            this.editor.updateShape({
+              id: to.id as TLShapeId,
+              type: "frame",
+              props: { name: uniquePath },
+            });
+          });
+        }
         this.fileToShape.delete(oldPath);
-        this.shapeToFile.set(to.id, newName);
-        this.fileToShape.set(newName, to.id);
+        this.shapeToFile.set(to.id, uniquePath);
+        this.fileToShape.set(uniquePath, to.id);
+        this.forgetPath(oldPath);
+        this.rememberPath(uniquePath, { isDirectory: true });
         // Update children paths
         for (const [shapeId, filePath] of this.shapeToFile.entries()) {
           if (shapeId === to.id) continue;
           if (filePath.startsWith(`${oldPath}/`)) {
-            const newChildPath = newName + filePath.slice(oldPath.length);
+            const newChildPath = uniquePath + filePath.slice(oldPath.length);
             this.shapeToFile.set(shapeId, newChildPath);
             this.fileToShape.delete(filePath);
             this.fileToShape.set(newChildPath, shapeId);
+            this.forgetPath(filePath);
+            this.rememberPath(newChildPath, { isDirectory: false });
           }
         }
         changes.push({
           action: "rename",
           shapeType: "frame",
-          path: newName,
+          path: uniquePath,
           oldPath,
         });
       }
@@ -514,6 +756,7 @@ export class CanvasSync {
 
     this.shapeToFile.delete(shape.id);
     this.fileToShape.delete(path);
+    this.forgetPath(path);
 
     if (shape.type === "named_text") {
       return [{ action: "delete", shapeType: "named_text", path }];
@@ -525,6 +768,7 @@ export class CanvasSync {
         if (fp.startsWith(prefix)) {
           this.shapeToFile.delete(sid);
           this.fileToShape.delete(fp);
+          this.forgetPath(fp);
         }
       }
       return [{ action: "delete", shapeType: "frame", path }];
@@ -563,6 +807,7 @@ export class CanvasSync {
       if (assetId === to.id && !this.shapeToFile.has(shape.id)) {
         this.shapeToFile.set(shape.id, path);
         this.fileToShape.set(path, shape.id);
+        this.rememberPath(path, { isDirectory: false });
         break;
       }
     }
@@ -579,6 +824,7 @@ export class CanvasSync {
         const path = src.slice("/canvas/".length);
         this.shapeToFile.set(shapeId, path);
         this.fileToShape.set(path, shapeId);
+        this.rememberPath(path, { isDirectory: false });
         return;
       }
     }
@@ -620,18 +866,34 @@ export class CanvasSync {
     // Detect moves: a delete followed by a create of the same filename
     // (with the same base name, just different directory).
     // This happens when `mv canvas/a.txt canvas/folder/a.txt`.
-    const moves = this.detectMoves(syncDeletes, syncCreates);
+    const createCandidates = [...syncCreates, ...asyncImageCreates];
+    const moves = this.detectMoves(syncDeletes, createCandidates);
     for (const move of moves) {
       // Remove from pending create/delete lists
       const delIdx = syncDeletes.indexOf(move.deleteEvent);
       if (delIdx >= 0) syncDeletes.splice(delIdx, 1);
       const createIdx = syncCreates.indexOf(move.createEvent);
-      if (createIdx >= 0) syncCreates.splice(createIdx, 1);
+      if (createIdx >= 0) {
+        syncCreates.splice(createIdx, 1);
+      } else {
+        const asyncIdx = asyncImageCreates.indexOf(move.createEvent);
+        if (asyncIdx >= 0) asyncImageCreates.splice(asyncIdx, 1);
+      }
     }
 
     // Handle moves with reparent animation
     if (moves.length > 0) {
       this.handleFSMoves(moves);
+      for (const move of moves) {
+        const oldMeta = this.knownMeta.get(move.deleteEvent.path);
+        this.forgetPath(move.deleteEvent.path);
+        this.rememberPath(move.createEvent.path, {
+          size: move.createEvent.size ?? oldMeta?.size,
+          mtimeMs: move.createEvent.mtimeMs ?? oldMeta?.mtimeMs,
+          content: move.createEvent.content ?? oldMeta?.content,
+          isDirectory: move.createEvent.isDirectory ?? oldMeta?.isDirectory,
+        });
+      }
     }
 
     // Handle creates + modifies inside mergeRemoteChanges
@@ -644,6 +906,9 @@ export class CanvasSync {
           if (id) createdShapeIds.push(id);
         }
       });
+      for (const change of toProcess) {
+        this.applyKnownEvent(change);
+      }
     }
 
     // Fade-in animation for newly created shapes
@@ -665,11 +930,13 @@ export class CanvasSync {
     // Handle deletes with fade-out animation
     for (const change of syncDeletes) {
       this.handleFSDeletedAnimated(change);
+      this.applyKnownEvent(change);
     }
 
     // Handle async image creates
     for (const change of asyncImageCreates) {
       this.createImageFromFS(change);
+      this.applyKnownEvent(change);
     }
 
     this.scheduleSave();
@@ -679,33 +946,10 @@ export class CanvasSync {
     deletes: CanvasFSEvent[],
     creates: CanvasFSEvent[],
   ): { deleteEvent: CanvasFSEvent; createEvent: CanvasFSEvent }[] {
-    const moves: { deleteEvent: CanvasFSEvent; createEvent: CanvasFSEvent }[] = [];
-    const usedCreates = new Set<number>();
-
-    for (const del of deletes) {
-      if (del.isDirectory) continue;
-      const delName = pathToName(del.path);
-      const delExt = del.path.split(".").pop() ?? "";
-
-      for (let i = 0; i < creates.length; i++) {
-        if (usedCreates.has(i)) continue;
-        const create = creates[i];
-        if (create.isDirectory) continue;
-        const createName = pathToName(create.path);
-        const createExt = create.path.split(".").pop() ?? "";
-
-        // Same filename (name + extension), different directory = move
-        if (delName === createName && delExt === createExt && del.path !== create.path) {
-          // Must have an existing shape for the deleted path
-          if (this.fileToShape.has(del.path)) {
-            moves.push({ deleteEvent: del, createEvent: create });
-            usedCreates.add(i);
-            break;
-          }
-        }
-      }
-    }
-    return moves;
+    const eligibleDeletes = deletes.filter(
+      (del) => !del.isDirectory && this.fileToShape.has(del.path),
+    );
+    return detectMovesEnhanced(eligibleDeletes, creates, this.knownMeta);
   }
 
   private handleFSMoves(moves: { deleteEvent: CanvasFSEvent; createEvent: CanvasFSEvent }[]): void {
@@ -750,7 +994,25 @@ export class CanvasSync {
             props: { text: createEvent.content },
           });
         }
+
+        if (shape.type === "named_text") {
+          const newName = pathToName(createEvent.path);
+          const currentName = (shape.props as { name?: string }).name;
+          if (newName && newName !== currentName) {
+            this.editor.updateShape({
+              id: shapeId as TLShapeId,
+              type: "named_text",
+              props: { name: newName },
+            });
+          }
+        }
       });
+
+      if (shape.type === "image") {
+        const newFileName = createEvent.path.split("/").pop() ?? createEvent.path;
+        this.updateImageAssetName(shapeId, newFileName);
+        this.scheduleAnnotationCheck();
+      }
 
       // Animate from old position to new position if we have old bounds
       if (oldPageBounds) {
@@ -850,14 +1112,7 @@ export class CanvasSync {
     const { w, h } = await loadImageDimensions(src);
 
     // Scale down large images to reasonable canvas size
-    const maxDim = 600;
-    let displayW = w;
-    let displayH = h;
-    if (w > maxDim || h > maxDim) {
-      const scale = maxDim / Math.max(w, h);
-      displayW = Math.round(w * scale);
-      displayH = Math.round(h * scale);
-    }
+    const { w: displayW, h: displayH } = scaleImageDisplay(w, h);
 
     const assetId = AssetRecordType.createId();
     const shapeId = createShapeId();
@@ -908,6 +1163,7 @@ export class CanvasSync {
     this.shapeToFile.set(shapeId, event.path);
     this.fileToShape.set(event.path, shapeId);
     this.scheduleSave();
+    this.scheduleAnnotationCheck();
   }
 
   private handleFSModified(event: CanvasFSEvent): void {
@@ -916,13 +1172,21 @@ export class CanvasSync {
     if (!shapeId) return;
 
     const shape = this.editor.getShape(shapeId as TLShapeId);
-    if (!shape || shape.type !== "named_text" || event.content === undefined) return;
+    if (!shape) return;
 
-    this.editor.updateShape({
-      id: shapeId as TLShapeId,
-      type: "named_text",
-      props: { text: event.content },
-    });
+    if (shape.type === "named_text" && event.content !== undefined) {
+      this.editor.updateShape({
+        id: shapeId as TLShapeId,
+        type: "named_text",
+        props: { text: event.content },
+      });
+      return;
+    }
+
+    if (shape.type === "image") {
+      void this.refreshImageAsset(shapeId as TLShapeId, event.path, event.mtimeMs);
+      this.scheduleAnnotationCheck();
+    }
   }
 
   // Immediate delete (used inside mergeRemoteChanges during init/reconcile)

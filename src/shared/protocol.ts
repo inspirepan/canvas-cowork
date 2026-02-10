@@ -140,6 +140,8 @@ export interface CanvasFSEvent {
   path: string; // relative to canvas/
   isDirectory: boolean;
   timestamp: number;
+  size?: number;
+  mtimeMs?: number;
   content?: string; // text file content (for created/modified .txt files)
 }
 
@@ -147,6 +149,8 @@ export interface CanvasFSEvent {
 export interface CanvasFileEntry {
   path: string;
   type: CanvasShapeType | "directory";
+  size?: number;
+  mtimeMs?: number;
   content?: string; // text file content
 }
 
