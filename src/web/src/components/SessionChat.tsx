@@ -8,6 +8,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Copy,
   FileText,
   FolderOpen,
   ImageIcon,
@@ -282,6 +283,29 @@ function ThinkingView({ block }: { block: UIThinkingBlock }) {
   );
 }
 
+// -- Copy Button --
+
+function CopyButton({ text, className }: { text: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className={`flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors ${className ?? ""}`}
+    >
+      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
 // -- Message Rendering --
 
 export function stripSystemTags(content: string): string {
@@ -326,7 +350,7 @@ function UserMessageView({ content, images }: { content: string; images?: UIImag
   );
 
   return (
-    <div className="flex justify-end px-4 py-2">
+    <div className="flex flex-col items-end px-4 py-2">
       <div className="bg-blue-50 dark:bg-blue-950/30 text-slate-600 dark:text-slate-300 rounded-2xl rounded-br-md px-3.5 py-2 max-w-[85%] space-y-2">
         {attachmentMeta.length > 0 ? (
           <div className="flex flex-wrap gap-1.5">
@@ -379,11 +403,17 @@ function UserMessageView({ content, images }: { content: string; images?: UIImag
         ) : null}
         <p className="prose prose-sm whitespace-pre-wrap">{displayContent}</p>
       </div>
+      <CopyButton text={displayContent} className="mt-1 mr-1" />
     </div>
   );
 }
 
 function AssistantMessageView({ message }: { message: UIAssistantMessage }) {
+  const textContent = message.content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+
   return (
     <div className="px-4 py-2 flex flex-col gap-1">
       {message.content.map((block, i) => {
@@ -417,6 +447,7 @@ function AssistantMessageView({ message }: { message: UIAssistantMessage }) {
           <span className="break-all min-w-0">{message.errorMessage}</span>
         </div>
       )}
+      {textContent && !message.isStreaming && <CopyButton text={textContent} className="mt-0.5" />}
     </div>
   );
 }
