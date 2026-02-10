@@ -697,6 +697,7 @@ export function InputBox({
     setText("");
     setMentionAttachments([]);
     setMentionQuery(null);
+    setDismissedIds(new Set(selectionAttachments.map((a) => a.shapeId)));
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
