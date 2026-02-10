@@ -132,6 +132,10 @@ function createGenerateImageTool(canvasDir: string): ToolDefinition {
 - Generated images are saved to the canvas/ directory and appear on the user's canvas.
 - Supports up to 14 input images for multi-image composition.
 
+Prompt input: supports both inline "prompt" and "prompt_file" (path to a .txt file).
+- Prompts longer than 200 characters are automatically saved as a companion txt file (e.g. "sunset-prompt.txt" for "sunset.png").
+- When retrying or iterating, prefer passing the saved prompt_file path instead of re-typing the full prompt. You can edit the file first with the Edit tool, then pass it as prompt_file.
+
 When using multiple reference images:
 - Be explicit about which image controls LAYOUT (spatial arrangement, camera angle, composition) vs STYLE (lighting, color, atmosphere) vs CONTENT (objects, elements to include).
 - Assign each image a distinct role: edit_target for preserving layout/structure, style_reference for visual style only, content_reference for objects/elements.
@@ -150,7 +154,7 @@ When using multiple reference images:
       prompt_file: Type.Optional(
         Type.String({
           description:
-            "Path to a text file containing the generation prompt. Use this for long/complex prompts. Takes precedence over prompt.",
+            "Path to a .txt file containing the generation prompt. Long prompts (>200 chars) are auto-saved as companion files (e.g. canvas/sunset-prompt.txt). For retries or iterations, pass the saved file path here instead of re-typing the prompt. Edit the file first if you need to modify it. Takes precedence over prompt.",
         }),
       ),
       reference_images: Type.Optional(
