@@ -7,7 +7,7 @@ Give Claude Cowork a canvas UI
 
 A spatial canvas interface where humans and AI agents collaborate through a shared workspace. The canvas is abstracted as a file system -- users interact visually on the canvas, while agents read and write files.
 
-
+![screenshot](docs/screenshot.jpg)
 
 ## How It Works
 
