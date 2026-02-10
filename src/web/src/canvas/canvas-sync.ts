@@ -440,6 +440,36 @@ export class CanvasSync {
           content: newText,
         });
       }
+    } else if (to.type === "image") {
+      const oldPath = this.shapeToFile.get(to.id);
+      if (!oldPath) return changes;
+
+      // Check for reparenting (moved in/out of frame)
+      if (from.parentId !== to.parentId) {
+        const fileName = oldPath.split("/").pop() ?? oldPath;
+        const newParentPath = this.getFramePath(to.parentId);
+        const newPath = newParentPath ? `${newParentPath}/${fileName}` : fileName;
+        this.fileToShape.delete(oldPath);
+        this.shapeToFile.set(to.id, newPath);
+        this.fileToShape.set(newPath, to.id);
+        changes.push({
+          action: "move",
+          shapeType: "image",
+          path: newPath,
+          oldPath,
+        });
+        // Also move annotated export if it exists
+        if (this.annotatedImages.has(to.id)) {
+          const oldAnnotated = this.makeAnnotatedPath(oldPath);
+          const newAnnotated = this.makeAnnotatedPath(newPath);
+          changes.push({
+            action: "move",
+            shapeType: "image",
+            path: newAnnotated,
+            oldPath: oldAnnotated,
+          });
+        }
+      }
     } else if (to.type === "frame") {
       const oldPath = this.shapeToFile.get(to.id);
       if (!oldPath) return changes;
