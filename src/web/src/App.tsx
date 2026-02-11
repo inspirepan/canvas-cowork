@@ -150,23 +150,20 @@ export function App() {
     [editor],
   );
 
-  const addImageToCanvas = useCallback(
-    async (base64: string, mimeType: string) => {
-      const s = syncRef.current;
-      if (!s) return null;
-      const { shapeId, path } = await s.addImageFromBase64(base64, mimeType);
-      const name = path.split("/").pop() ?? path;
-      return {
-        shapeId,
-        path,
-        type: "image" as const,
-        name,
-        imageData: base64,
-        imageMimeType: mimeType,
-      };
-    },
-    [],
-  );
+  const addImageToCanvas = useCallback(async (base64: string, mimeType: string) => {
+    const s = syncRef.current;
+    if (!s) return null;
+    const { shapeId, path } = await s.addImageFromBase64(base64, mimeType);
+    const name = path.split("/").pop() ?? path;
+    return {
+      shapeId,
+      path,
+      type: "image" as const,
+      name,
+      imageData: base64,
+      imageMimeType: mimeType,
+    };
+  }, []);
 
   const handleOrganize = useCallback(() => {
     syncRef.current?.organizeCanvas();
@@ -211,6 +208,7 @@ export function App() {
       </button>
 
       {/* AgentPanel sidebar - stop keyboard/clipboard events from reaching tldraw */}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: event isolation wrapper */}
       <div
         className="h-full shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out"
         style={{ width: panelOpen ? PANEL_WIDTH : 0 }}

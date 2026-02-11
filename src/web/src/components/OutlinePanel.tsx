@@ -112,13 +112,10 @@ function TreeItem({
     editor.zoomToSelection({ animation: { duration: 200 } });
   }, [editor, node.shapeId]);
 
-  const handleToggle = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      setExpanded((v) => !v);
-    },
-    [],
-  );
+  const handleToggle = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpanded((v) => !v);
+  }, []);
 
   return (
     <>
@@ -130,13 +127,17 @@ function TreeItem({
       >
         <div className="flex items-center gap-1.5 w-full">
           {isFrame ? (
-            <span onClick={handleToggle} className="shrink-0 cursor-pointer p-0.5 -m-0.5">
+            <button
+              type="button"
+              onClick={handleToggle}
+              className="shrink-0 cursor-pointer p-0.5 -m-0.5"
+            >
               {expanded ? (
                 <ChevronDown className="h-3 w-3 text-muted-foreground" />
               ) : (
                 <ChevronRight className="h-3 w-3 text-muted-foreground" />
               )}
-            </span>
+            </button>
           ) : (
             <span className="w-4 shrink-0" />
           )}
@@ -153,10 +154,7 @@ function TreeItem({
         )}
       </button>
       {isFrame && expanded && node.children.length > 0 && (
-        <div
-          className="border-l border-border"
-          style={{ marginLeft: depth * 16 + 16 }}
-        >
+        <div className="border-l border-border" style={{ marginLeft: depth * 16 + 16 }}>
           {node.children.map((child) => (
             <TreeItem
               key={child.shapeId}
@@ -172,13 +170,7 @@ function TreeItem({
   );
 }
 
-export function OutlinePanel({
-  editor,
-  sync,
-}: {
-  editor: Editor | null;
-  sync: CanvasSync | null;
-}) {
+export function OutlinePanel({ editor, sync }: { editor: Editor | null; sync: CanvasSync | null }) {
   const [open, setOpen] = useState(true);
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -204,7 +196,7 @@ export function OutlinePanel({
     return unsub;
   }, [editor]);
 
-  if (!editor || !sync) return null;
+  if (!(editor && sync)) return null;
 
   return (
     <div className="fixed top-3 left-3 z-50 flex items-start gap-2">
@@ -217,9 +209,7 @@ export function OutlinePanel({
           <ScrollArea className="flex-1 overflow-auto">
             <div className="py-1">
               {tree.length === 0 ? (
-                <div className="px-3 py-4 text-xs text-muted-foreground text-center">
-                  No items
-                </div>
+                <div className="px-3 py-4 text-xs text-muted-foreground text-center">No items</div>
               ) : (
                 tree.map((node) => (
                   <TreeItem
@@ -240,11 +230,7 @@ export function OutlinePanel({
         onClick={() => setOpen((v) => !v)}
         className="p-2 rounded-lg bg-background/80 backdrop-blur border border-border shadow-sm hover:bg-accent transition-colors"
       >
-        {open ? (
-          <PanelLeftClose className="h-4 w-4" />
-        ) : (
-          <PanelLeftOpen className="h-4 w-4" />
-        )}
+        {open ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
       </button>
     </div>
   );

@@ -60,12 +60,7 @@ export function SessionList({
       {/* Header */}
       <div className="shrink-0 flex items-center justify-between px-4 pt-4 pb-3">
         <h2 className="text-sm font-medium text-foreground">Tasks</h2>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={onNewSession}
-        >
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onNewSession}>
           <Plus className="h-4 w-4" />
         </Button>
       </div>
@@ -89,7 +84,9 @@ export function SessionList({
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm truncate flex-1 text-foreground">{stripSystemTags(session.title)}</span>
+                    <span className="text-sm truncate flex-1 text-foreground">
+                      {stripSystemTags(session.title)}
+                    </span>
                     <span className="text-xs text-muted-foreground shrink-0">
                       {formatRelativeTime(session.modifiedAt)}
                     </span>

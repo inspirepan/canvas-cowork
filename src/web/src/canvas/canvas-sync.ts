@@ -7,7 +7,9 @@ import {
   loadSnapshot,
   type TLAssetId,
   type TLParentId,
+  type TLShape,
   type TLShapeId,
+  type TLShapePartial,
   type TLStoreEventInfo,
 } from "tldraw";
 import type {
@@ -127,8 +129,18 @@ export class CanvasSync {
   }
 
   // Get all canvas items for @ mention autocomplete
-  getAllCanvasItems(): { shapeId: string; path: string; type: "text" | "image" | "frame"; name: string }[] {
-    const items: { shapeId: string; path: string; type: "text" | "image" | "frame"; name: string }[] = [];
+  getAllCanvasItems(): {
+    shapeId: string;
+    path: string;
+    type: "text" | "image" | "frame";
+    name: string;
+  }[] {
+    const items: {
+      shapeId: string;
+      path: string;
+      type: "text" | "image" | "frame";
+      name: string;
+    }[] = [];
     for (const [shapeId, path] of this.shapeToFile) {
       const shape = this.editor.getShape(shapeId as TLShapeId);
       if (!shape) continue;
@@ -223,10 +235,9 @@ export class CanvasSync {
     });
 
     requestAnimationFrame(() => {
-      this.editor.animateShapes(
-        [{ id: shapeId, type: "image" as const, opacity: 1 as const }],
-        { animation: { duration: FADE_IN_DURATION } },
-      );
+      this.editor.animateShapes([{ id: shapeId, type: "image" as const, opacity: 1 as const }], {
+        animation: { duration: FADE_IN_DURATION },
+      });
     });
 
     this.shapeToFile.set(shapeId, path);
@@ -1640,7 +1651,7 @@ export class CanvasSync {
     const gap = SHAPE_SPACING * 2;
 
     // Collect sizes for all shapes
-    const sizes: { id: TLShapeId; type: string; w: number; h: number }[] = [];
+    const sizes: { id: TLShapeId; type: TLShape["type"]; w: number; h: number }[] = [];
     for (const id of topLevelIds) {
       const shape = this.editor.getShape(id);
       if (!shape) continue;
@@ -1656,7 +1667,7 @@ export class CanvasSync {
     const maxRowWidth = medianW * 3 + gap * 2;
 
     // Greedy row packing
-    const updates: { id: TLShapeId; type: string; x: number; y: number }[] = [];
+    const updates: TLShapePartial[] = [];
     let curX = 0;
     let curY = 0;
     let rowMaxHeight = 0;
@@ -1693,7 +1704,7 @@ export class CanvasSync {
     }
 
     // Collect only named_text and image children
-    const children: { id: TLShapeId; type: string; w: number; h: number }[] = [];
+    const children: { id: TLShapeId; type: TLShape["type"]; w: number; h: number }[] = [];
     for (const childId of childIds) {
       const child = this.editor.getShape(childId);
       if (!child) continue;
@@ -1738,7 +1749,10 @@ export class CanvasSync {
 
     // Compute and set frame size
     const frameW = Math.max(FRAME_INNER_PADDING * 2 + effectiveCols * cellW - SHAPE_SPACING, 240);
-    const frameH = Math.max(FRAME_HEADER_OFFSET + rows * cellH - SHAPE_SPACING + FRAME_INNER_PADDING, 120);
+    const frameH = Math.max(
+      FRAME_HEADER_OFFSET + rows * cellH - SHAPE_SPACING + FRAME_INNER_PADDING,
+      120,
+    );
     this.editor.updateShape({
       id: frameId,
       type: "frame",

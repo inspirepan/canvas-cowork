@@ -55,8 +55,7 @@ export function detectMovesEnhanced(
     if (delMeta.size === undefined || create.size === undefined) return false;
     if (delMeta.mtimeMs === undefined || create.mtimeMs === undefined) return false;
     return (
-      delMeta.size === create.size &&
-      Math.round(delMeta.mtimeMs) === Math.round(create.mtimeMs)
+      delMeta.size === create.size && Math.round(delMeta.mtimeMs) === Math.round(create.mtimeMs)
     );
   };
 

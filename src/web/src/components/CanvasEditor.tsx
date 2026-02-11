@@ -91,9 +91,7 @@ const canvasAssetStore: TLAssetStore = {
       setTimeout(() => {
         const existing = editorRef?.getAsset(asset.id);
         if (existing?.type === "image") {
-          editorRef?.updateAssets([
-            { ...existing, props: { ...existing.props, name: finalName } },
-          ]);
+          editorRef?.updateAssets([{ ...existing, props: { ...existing.props, name: finalName } }]);
         }
       }, 0);
     }

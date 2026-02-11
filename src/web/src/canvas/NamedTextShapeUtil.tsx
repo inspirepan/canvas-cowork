@@ -180,9 +180,7 @@ export class NamedTextShapeUtil extends ShapeUtil<NamedTextShape> {
 
   indicator(shape: NamedTextShape) {
     const { width, height } = this.getTextSize(shape);
-    return (
-      <rect width={toDomPrecision(width)} height={toDomPrecision(height)} rx={6} ry={6} />
-    );
+    return <rect width={toDomPrecision(width)} height={toDomPrecision(height)} rx={6} ry={6} />;
   }
 
   override onEditEnd(shape: NamedTextShape) {

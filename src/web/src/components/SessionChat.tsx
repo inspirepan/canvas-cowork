@@ -52,6 +52,8 @@ import type {
 import type { CanvasContext } from "./AgentPanel.js";
 import { DiffView } from "./DiffView";
 
+const SYSTEM_TAG_RE = /^<system>\n[\s\S]*?\n<\/system>/;
+
 // -- Tool Call Block --
 
 function PiDiffView({ diff }: { diff: string }) {
@@ -106,9 +108,7 @@ function ToolArgItem({ name, value }: { name: string; value: unknown }) {
           <span className="whitespace-pre-wrap break-words block">
             {expanded ? valueStr : previewText}
           </span>
-          {!expanded && (
-            <span className="text-muted-foreground/50 text-[10px]">...</span>
-          )}
+          {!expanded && <span className="text-muted-foreground/50 text-[10px]">...</span>}
         </div>
       </div>
     );
@@ -339,7 +339,7 @@ interface AttachmentMeta {
 }
 
 function parseCanvasAttachmentMeta(content: string): AttachmentMeta[] {
-  const match = content.match(/^<system>\n[\s\S]*?\n<\/system>/);
+  const match = content.match(SYSTEM_TAG_RE);
   if (!match) return [];
   const block = match[0];
   const results: AttachmentMeta[] = [];
@@ -786,6 +786,7 @@ export function InputBox({
   };
 
   // Auto-resize textarea
+  // biome-ignore lint/correctness/useExhaustiveDependencies: text triggers resize recalculation
   useEffect(() => {
     const ta = textareaRef.current;
     if (ta) {
@@ -1027,6 +1028,7 @@ export function SessionChat({
   };
 
   // Auto-scroll when user is near bottom and messages change
+  // biome-ignore lint/correctness/useExhaustiveDependencies: state.messages triggers scroll
   useEffect(() => {
     if (isNearBottomRef.current) {
       const el = scrollContainerRef.current;
@@ -1043,7 +1045,9 @@ export function SessionChat({
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onBack}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
-        <span className="text-sm font-medium truncate flex-1">{stripSystemTags(state.info.title)}</span>
+        <span className="text-sm font-medium truncate flex-1">
+          {stripSystemTags(state.info.title)}
+        </span>
         {state.info.isStreaming && (
           <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
         )}

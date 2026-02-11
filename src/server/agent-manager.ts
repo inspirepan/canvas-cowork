@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import sharp from "sharp";
 import { getModel } from "@mariozechner/pi-ai";
 import {
   type AgentSession,
@@ -13,6 +12,7 @@ import {
   SessionManager,
   type ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
+import sharp from "sharp";
 import type {
   Attachment,
   ModelInfo,
@@ -213,7 +213,10 @@ export class AgentManager {
 
     // Update title from first user message (strip <system> tags from canvas attachments)
     if (managed.title === "New conversation") {
-      managed.title = text.replace(/<system>[\s\S]*?<\/system>/g, "").trim().slice(0, 100);
+      managed.title = text
+        .replace(/<system>[\s\S]*?<\/system>/g, "")
+        .trim()
+        .slice(0, 100);
     }
 
     // Auto-save long user messages to file for prompt persistence.
@@ -235,14 +238,15 @@ export class AgentManager {
 
     // Convert attachments to pi SDK ImageContent, enforcing size limit
     const rawImages = attachments?.filter((a) => a.type === "image") ?? [];
-    const images = rawImages.length > 0
-      ? await Promise.all(
-          rawImages.map(async (a) => {
-            const { data, mimeType } = await compressImage(a.data, a.mimeType);
-            return { type: "image" as const, data, mimeType };
-          }),
-        )
-      : undefined;
+    const images =
+      rawImages.length > 0
+        ? await Promise.all(
+            rawImages.map(async (a) => {
+              const { data, mimeType } = await compressImage(a.data, a.mimeType);
+              return { type: "image" as const, data, mimeType };
+            }),
+          )
+        : undefined;
 
     const opts = {
       ...((images?.length ?? 0) > 0 ? { images } : {}),

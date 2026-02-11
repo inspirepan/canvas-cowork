@@ -15,8 +15,7 @@ export interface CanvasAttachment {
 function formatAttachment(a: CanvasAttachment): string {
   const path = `canvas/${a.path}`;
   if (a.type === "frame") {
-    const children =
-      a.children?.map((c) => formatAttachment(c)).join("\n") ?? "";
+    const children = a.children?.map((c) => formatAttachment(c)).join("\n") ?? "";
     return `<folder path="${path}/">\n${children}\n</folder>`;
   }
   if (a.type === "image") {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { CanvasFSEvent } from "../../../../shared/protocol.js";
 import {
   buildCacheBustedSrc,
   detectMovesEnhanced,
@@ -24,10 +25,10 @@ describe("ensureUniquePath", () => {
 
 describe("detectMovesEnhanced", () => {
   it("matches same filename across directories", () => {
-    const deletes = [
+    const deletes: CanvasFSEvent[] = [
       { action: "deleted", path: "a/note.txt", isDirectory: false, timestamp: 1 },
     ];
-    const creates = [
+    const creates: CanvasFSEvent[] = [
       { action: "created", path: "b/note.txt", isDirectory: false, timestamp: 2 },
     ];
     const moves = detectMovesEnhanced(deletes, creates, new Map());
@@ -37,10 +38,10 @@ describe("detectMovesEnhanced", () => {
   });
 
   it("matches by size and mtime when name changes", () => {
-    const deletes = [
+    const deletes: CanvasFSEvent[] = [
       { action: "deleted", path: "old.txt", isDirectory: false, timestamp: 1 },
     ];
-    const creates = [
+    const creates: CanvasFSEvent[] = [
       {
         action: "created",
         path: "new.txt",
@@ -57,10 +58,10 @@ describe("detectMovesEnhanced", () => {
   });
 
   it("does not match when metadata differs", () => {
-    const deletes = [
+    const deletes: CanvasFSEvent[] = [
       { action: "deleted", path: "old.txt", isDirectory: false, timestamp: 1 },
     ];
-    const creates = [
+    const creates: CanvasFSEvent[] = [
       {
         action: "created",
         path: "new.txt",

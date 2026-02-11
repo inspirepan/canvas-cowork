@@ -1,9 +1,11 @@
-import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 import { compressImage } from "./agent-manager.js";
 import type { CanvasFS, CanvasJsonData } from "./canvas-fs.js";
+
+const FILE_EXT_RE = /\.\w+$/;
 
 // -- System prompt for Canvas FS awareness (loaded from markdown file) --
 
@@ -148,7 +150,7 @@ When using multiple reference images:
       prompt: Type.Optional(
         Type.String({
           description:
-            "Image generation/editing prompt. For multi-image inputs, reference images by index and describe how they interact (e.g. \"apply Image 2's style to Image 1\", \"put the bird from Image 1 on the elephant in Image 2\"). Either prompt or prompt_file must be provided.",
+            'Image generation/editing prompt. For multi-image inputs, reference images by index and describe how they interact (e.g. "apply Image 2\'s style to Image 1", "put the bird from Image 1 on the elephant in Image 2"). Either prompt or prompt_file must be provided.',
         }),
       ),
       prompt_file: Type.Optional(
@@ -230,7 +232,7 @@ When using multiple reference images:
       }
 
       // Augment prompt with reference image descriptions
-      if (params.reference_images?.length) {
+      if (params.reference_images && params.reference_images.length > 0) {
         const descriptions = params.reference_images.map((img, i) => {
           const roleLabels: Record<string, string> = {
             edit_target: "Edit target (preserve layout/structure)",
@@ -245,7 +247,7 @@ When using multiple reference images:
 
       // Build output path (supports subdirectory paths like "folder/image.png")
       let filename = params.name;
-      if (!/\.\w+$/.test(filename)) filename += ".png";
+      if (!FILE_EXT_RE.test(filename)) filename += ".png";
       const rawOutputPath = join(canvasDir, filename);
       const outputDir = dirname(rawOutputPath);
       if (!existsSync(outputDir)) {
@@ -263,7 +265,15 @@ When using multiple reference images:
       }
 
       // Build command args
-      const args = ["run", "--quiet", GENERATE_IMAGE_SCRIPT, "--prompt", prompt, "--filename", outputPath];
+      const args = [
+        "run",
+        "--quiet",
+        GENERATE_IMAGE_SCRIPT,
+        "--prompt",
+        prompt,
+        "--filename",
+        outputPath,
+      ];
 
       if (params.resolution) {
         args.push("--resolution", params.resolution);
@@ -368,12 +378,16 @@ function resolveFilenameConflict(filePath: string): string {
 
 // -- Prompt file persistence --
 
-function savePromptFile(canvasDir: string, content: string, associatedFile?: string): string | null {
+function savePromptFile(
+  canvasDir: string,
+  content: string,
+  associatedFile?: string,
+): string | null {
   try {
     let filename: string;
     if (associatedFile) {
       // Associate prompt file with the generated image: "folder/sunset.png" -> "folder/sunset-prompt.txt"
-      const base = associatedFile.replace(/\.\w+$/, "");
+      const base = associatedFile.replace(FILE_EXT_RE, "");
       filename = `${base}-prompt.txt`;
     } else {
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);

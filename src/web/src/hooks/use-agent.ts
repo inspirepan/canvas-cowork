@@ -170,6 +170,24 @@ function serializeToUIMessages(messages: SerializedMessage[]): UIMessage[] {
   return result;
 }
 
+const STORAGE_KEY_MODEL = "canvas-cowork:defaultModel";
+const STORAGE_KEY_THINKING = "canvas-cowork:defaultThinkingLevel";
+
+function loadStoredModel(): ModelInfo | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_MODEL);
+    if (raw) return JSON.parse(raw) as ModelInfo;
+  } catch {
+    // ignore corrupt data
+  }
+  return null;
+}
+
+function loadStoredThinkingLevel(): ThinkingLevel | null {
+  const raw = localStorage.getItem(STORAGE_KEY_THINKING);
+  return raw ? (raw as ThinkingLevel) : null;
+}
+
 export function useAgent(): UseAgentReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -177,11 +195,31 @@ export function useAgent(): UseAgentReturn {
   const [sessionStates, setSessionStates] = useState<Map<string, SessionState>>(new Map());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [defaultModel, setDefaultModel] = useState<ModelInfo | null>(null);
-  const [defaultThinkingLevel, setDefaultThinkingLevel] = useState<ThinkingLevel>("off");
+  const [defaultModel, _setDefaultModel] = useState<ModelInfo | null>(loadStoredModel);
+  const [defaultThinkingLevel, _setDefaultThinkingLevel] = useState<ThinkingLevel>(
+    () => loadStoredThinkingLevel() || "off",
+  );
   const [defaultAvailableThinkingLevels, setDefaultAvailableThinkingLevels] = useState<
     ThinkingLevel[]
   >([]);
+
+  const setDefaultModel = useCallback((model: ModelInfo) => {
+    _setDefaultModel(model);
+    try {
+      localStorage.setItem(STORAGE_KEY_MODEL, JSON.stringify(model));
+    } catch {
+      // storage full or unavailable
+    }
+  }, []);
+
+  const setDefaultThinkingLevel = useCallback((level: ThinkingLevel) => {
+    _setDefaultThinkingLevel(level);
+    try {
+      localStorage.setItem(STORAGE_KEY_THINKING, level);
+    } catch {
+      // storage full or unavailable
+    }
+  }, []);
 
   const [canvasState, setCanvasState] = useState<CanvasInitialState | null>(null);
   const canvasFSChangeRef = useRef<((changes: CanvasFSEvent[]) => void) | null>(null);
@@ -444,9 +482,15 @@ export function useAgent(): UseAgentReturn {
               timestamp: Date.now(),
             });
           }
-          // Update global defaults
-          if (msg.model) setDefaultModel(msg.model);
-          setDefaultThinkingLevel(msg.thinkingLevel);
+          // Update global defaults only as fallback (no user preference yet)
+          _setDefaultModel((prev) => {
+            if (prev) return prev;
+            return msg.model;
+          });
+          _setDefaultThinkingLevel((prev) => {
+            if (prev !== "off") return prev;
+            return msg.thinkingLevel;
+          });
           setDefaultAvailableThinkingLevels(msg.availableThinkingLevels);
 
           setSessions((prev) => [msg.session, ...prev]);
@@ -493,9 +537,7 @@ export function useAgent(): UseAgentReturn {
 
         case "session_loaded": {
           const uiMessages = serializeToUIMessages(msg.messages);
-          // Update global defaults
-          if (msg.model) setDefaultModel(msg.model);
-          setDefaultThinkingLevel(msg.thinkingLevel);
+          // Do not overwrite user's defaultModel/thinkingLevel preference
           setDefaultAvailableThinkingLevels(msg.availableThinkingLevels);
 
           setSessions((prev) =>
@@ -599,7 +641,7 @@ export function useAgent(): UseAgentReturn {
 
         case "models_list":
           setModels(msg.models);
-          setDefaultModel((prev) => {
+          _setDefaultModel((prev) => {
             if (prev) return prev;
             return (
               msg.models.find(
