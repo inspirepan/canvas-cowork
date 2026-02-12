@@ -1646,8 +1646,8 @@ export class CanvasSync {
       return this.getShapeSortName(a).localeCompare(this.getShapeSortName(b));
     });
 
-    // Step 3: Adaptive greedy row packing
-    // Target ~3 items per row by using median width to compute max row width
+    // Step 3: Masonry (waterfall) column layout
+    // Avoids wasted vertical space when elements have very different heights
     const gap = SHAPE_SPACING * 2;
 
     // Collect sizes for all shapes
@@ -1661,26 +1661,23 @@ export class CanvasSync {
       sizes.push({ id, type: shape.type, w: bounds.w, h: bounds.h });
     }
 
-    // Compute max row width from median element width * 3
+    // Determine column count and width from median element width
     const sortedWidths = sizes.map((s) => s.w).sort((a, b) => a - b);
     const medianW = sortedWidths[Math.floor(sortedWidths.length / 2)] ?? DEFAULT_WIDTH;
-    const maxRowWidth = medianW * 3 + gap * 2;
+    const numCols = Math.max(1, Math.min(sizes.length, 3));
+    const colWidth = Math.max(medianW, ...sizes.map((s) => s.w));
 
-    // Greedy row packing
+    // Track the bottom edge of each column
+    const colHeights = new Array(numCols).fill(0) as number[];
+
+    // Place each item in the shortest column
     const updates: TLShapePartial[] = [];
-    let curX = 0;
-    let curY = 0;
-    let rowMaxHeight = 0;
-
     for (const item of sizes) {
-      if (curX > 0 && curX + item.w > maxRowWidth) {
-        curX = 0;
-        curY += rowMaxHeight + gap;
-        rowMaxHeight = 0;
-      }
-      updates.push({ id: item.id, type: item.type, x: curX, y: curY });
-      curX += item.w + gap;
-      rowMaxHeight = Math.max(rowMaxHeight, item.h);
+      const shortestCol = colHeights.indexOf(Math.min(...colHeights));
+      const x = shortestCol * (colWidth + gap);
+      const y = colHeights[shortestCol];
+      updates.push({ id: item.id, type: item.type, x, y });
+      colHeights[shortestCol] = y + item.h + gap;
     }
 
     // Step 4: Animate to new positions
@@ -1724,33 +1721,33 @@ export class CanvasSync {
 
     const MAX_PER_ROW = 5;
     let maxW = 0;
-    let maxH = 0;
     for (const child of children) {
       maxW = Math.max(maxW, child.w);
-      maxH = Math.max(maxH, child.h);
     }
 
     const cellW = maxW + SHAPE_SPACING;
-    const cellH = maxH + SHAPE_SPACING;
     const effectiveCols = Math.min(children.length, MAX_PER_ROW);
-    const rows = Math.ceil(children.length / MAX_PER_ROW);
 
-    // Update children positions
-    for (let i = 0; i < children.length; i++) {
-      const col = i % MAX_PER_ROW;
-      const row = Math.floor(i / MAX_PER_ROW);
+    // Masonry layout: place each child in the shortest column
+    const colHeights = new Array(effectiveCols).fill(0) as number[];
+    for (const child of children) {
+      const shortestCol = colHeights.indexOf(Math.min(...colHeights));
+      const x = FRAME_INNER_PADDING + shortestCol * cellW;
+      const y = FRAME_HEADER_OFFSET + colHeights[shortestCol];
       this.editor.updateShape({
-        id: children[i].id,
-        type: children[i].type,
-        x: FRAME_INNER_PADDING + col * cellW,
-        y: FRAME_HEADER_OFFSET + row * cellH,
+        id: child.id,
+        type: child.type,
+        x,
+        y,
       });
+      colHeights[shortestCol] += child.h + SHAPE_SPACING;
     }
 
-    // Compute and set frame size
+    // Compute frame size from actual column heights
+    const maxColHeight = Math.max(...colHeights);
     const frameW = Math.max(FRAME_INNER_PADDING * 2 + effectiveCols * cellW - SHAPE_SPACING, 240);
     const frameH = Math.max(
-      FRAME_HEADER_OFFSET + rows * cellH - SHAPE_SPACING + FRAME_INNER_PADDING,
+      FRAME_HEADER_OFFSET + maxColHeight - SHAPE_SPACING + FRAME_INNER_PADDING,
       120,
     );
     this.editor.updateShape({
